@@ -1,0 +1,47 @@
+{
+  "name": "Офис",
+  "metadata": {
+    "created_at": "2025-10-07T15:01:50.023Z",
+    "version": "1.0"
+  },
+  "items": [
+    {
+      "term": "Стол",
+      "definition": "",
+      "image": "/static/uploads/img-1759849215870-i13nz.jpeg"
+    },
+    {
+      "term": "Стул",
+      "definition": "",
+      "image": "/static/uploads/img-1759849237960-ti6na.jpeg"
+    },
+    {
+      "term": "Стена",
+      "definition": "",
+      "image": "/static/uploads/img-1759849261466-szk1l.jpeg"
+    },
+    {
+      "term": "Стакан",
+      "definition": "",
+      "image": "/static/uploads/img-1759849284251-b3p0n.jpeg"
+    }
+  ],
+  "legacy_items": [
+    [
+      "Стол",
+      "images/img-1759849215870-i13nz.jpeg"
+    ],
+    [
+      "Стул",
+      "images/img-1759849237960-ti6na.jpeg"
+    ],
+    [
+      "Стена",
+      "images/img-1759849261466-szk1l.jpeg"
+    ],
+    [
+      "Стакан",
+      "images/img-1759849284251-b3p0n.jpeg"
+    ]
+  ]
+}
