@@ -1,5 +1,5 @@
 # Base image and working directory
-FROM python:3.11-slim
+FROM python:3.10-slim
 WORKDIR /app
 
 # Install system build deps (if native wheels required)
@@ -26,3 +26,4 @@ EXPOSE 8000
 
 # Run with Gunicorn using aiohttp worker; replace workers count if needed
 CMD ["gunicorn", "run_server:app", "-k", "aiohttp.GunicornWebWorker", "--bind", "0.0.0.0:8000", "--workers", "2"]
+
