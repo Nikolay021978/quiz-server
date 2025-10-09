@@ -38,13 +38,37 @@ ROUND_DELAY = 0.8
 RESTART_DELAY = 2.0
 NUM_QUESTIONS = 5
 
-BASE_DIR = os.path.dirname(__file__) or "."
-STATIC_DIR = os.path.join(BASE_DIR, "static")  # serve static files from ./static
-TOPICS_DIR = os.path.join(BASE_DIR, "topics")
-RATINGS_FILE = os.path.join(BASE_DIR, "ratings.json")
-THUMBS_DIR = os.path.join(STATIC_DIR, "thumbs")
-DEFAULT_WS_PATH = "/ws"
-DEFAULT_INDEX = "client.html"
+# используем уже определённые в модуле константы
+# BASE_DIR, STATIC_DIR, THUMBS_DIR
+STATIC_UPLOADS = os.path.join(STATIC_DIR, "uploads")
+IMAGES_DIR = os.path.join(BASE_DIR, "images")
+
+async def thumb_handler(request):
+    size = request.match_info.get('size')  # "420x0" — сейчас не используется для генерации
+    name = request.match_info.get('name')
+
+    # нормализация имени, предотвращение path traversal
+    name = os.path.basename(name)
+
+    # возможные места хранения исходного файла и готовой миниатюры
+    thumb_path = os.path.join(THUMBS_DIR, size, name)     # кешированная миниатюра /static/thumbs/420x0/name
+    orig_candidates = [
+        os.path.join(STATIC_UPLOADS, name),               # /static/uploads/name
+        os.path.join(IMAGES_DIR, name),                   # /images/name
+        os.path.join(STATIC_DIR, name)                    # /static/name (на случай)
+    ]
+
+    # если есть готовая миниатюра — отдать её
+    if os.path.isfile(thumb_path):
+        return web.FileResponse(thumb_path)
+
+    # если миниатюры нет, попробовать отдать оригинал (временно)
+    for path in orig_candidates:
+        if os.path.isfile(path):
+            return web.FileResponse(path)
+
+    # ни оригинала, ни миниатюры нет — 404
+    raise web.HTTPNotFound(text="not found")
 
 # Scoring
 BASE_POINTS = 1000
@@ -1086,6 +1110,21 @@ async def reload_topics_handler(request):
 async def ping(request):
     return web.Response(text="ok")
 
+async def thumb_handler(request):
+    size = request.match_info.get('size')  # e.g., "420x0"
+    name = request.match_info.get('name')
+    name = os.path.basename(name)  # normalize
+
+    candidates = [
+        os.path.join(STATIC_UPLOADS, name),
+        os.path.join(IMAGES_DIR, name)
+    ]
+
+    for path in candidates:
+        if os.path.isfile(path):
+            return web.FileResponse(path)
+
+    raise web.HTTPNotFound(text="not found")
 def create_app(topics_map: Dict[str, List[Tuple[str, str]]]):
     app = web.Application()
     import os
@@ -1137,5 +1176,6 @@ if __name__ == "__main__":
     except Exception:
         log.exception("Fatal error, exiting")
         sys.exit(2)
+
 
 
