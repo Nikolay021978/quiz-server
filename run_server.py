@@ -1082,6 +1082,9 @@ async def reload_topics_handler(request):
     except Exception as e:
         log.exception("reload topics failed")
         return web.json_response({"ok": False, "error": str(e)}, status=500)
+# Health endpoint
+async def ping(request):
+    return web.Response(text="ok")
 
 def create_app(topics_map: Dict[str, List[Tuple[str, str]]]):
     app = web.Application()
@@ -1092,6 +1095,9 @@ def create_app(topics_map: Dict[str, List[Tuple[str, str]]]):
     app.router.add_get('/static/uploads/{name}', static_handler)
     app.router.add_get('/thumbs/{size}/{name}', thumb_handler)
     app.router.add_post('/api/reload-topics', reload_topics_handler)
+
+    # <-- добавьте здесь регистрацию health endpoint
+    app.router.add_get('/ping', ping)
     return app
 
 def parse_args():
