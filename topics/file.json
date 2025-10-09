@@ -29,19 +29,19 @@
   "legacy_items": [
     [
       "Стол",
-      "images/img-1759849215870-i13nz.jpeg"
+      "/static/uploads/img-1759849215870-i13nz.jpeg"
     ],
     [
       "Стул",
-      "images/img-1759849237960-ti6na.jpeg"
+      "/static/uploads/img-1759849237960-ti6na.jpeg"
     ],
     [
       "Стена",
-      "images/img-1759849261466-szk1l.jpeg"
+      "/static/uploads/img-1759849261466-szk1l.jpeg"
     ],
     [
       "Стакан",
-      "images/img-1759849284251-b3p0n.jpeg"
+      "/static/uploads/img-1759849284251-b3p0n.jpeg"
     ]
   ]
 }
