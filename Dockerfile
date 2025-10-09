@@ -17,6 +17,7 @@ RUN python -m venv /opt/venv \
 
 # Copy application source code
 COPY . .
+RUN chmod -R a+r /app || true
 
 # Ensure virtualenv binaries are in PATH
 ENV PATH="/opt/venv/bin:$PATH"
@@ -26,5 +27,6 @@ EXPOSE 8000
 
 # Run with Gunicorn using aiohttp worker; replace workers count if needed
 CMD ["python", "run_server.py"]
+
 
 
