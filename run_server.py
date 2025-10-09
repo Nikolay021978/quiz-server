@@ -1098,6 +1098,20 @@ def create_app(topics_map: Dict[str, List[Tuple[str, str]]]):
 
     # <-- добавьте здесь регистрацию health endpoint
     app.router.add_get('/ping', ping)
+    import os
+    base = os.path.dirname(__file__)
+
+    uploads_dir = os.path.join(base, "static", "uploads")
+    if os.path.isdir(uploads_dir):
+        app.router.add_static('/static/uploads', uploads_dir, show_index=False)
+
+    images_dir = os.path.join(base, "images")
+    if os.path.isdir(images_dir):
+        app.router.add_static('/images', images_dir, show_index=False)
+
+    static_dir = os.path.join(base, "static")
+    if os.path.isdir(static_dir):
+        app.router.add_static('/static', static_dir, show_index=False)
     return app
 
 def parse_args():
@@ -1124,3 +1138,4 @@ if __name__ == "__main__":
     except Exception:
         log.exception("Fatal error, exiting")
         sys.exit(2)
+
