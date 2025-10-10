@@ -465,9 +465,10 @@ class QuizServer:
                     "server_ts": time.time(),
                     "question_topic": self._q_topics.get(qidx, self.current_topic)
                 }
+                # Send both original image and thumbnail path as fallback
                 if isinstance(definition, str) and definition.startswith("/static/"):
-                    payload["image"] = definition
                     basename = os.path.basename(definition)
+                    payload["image"] = definition
                     payload["image_thumb"] = f"/thumbs/420x0/{basename}"
                 else:
                     payload["term"] = term
@@ -656,6 +657,11 @@ async def static_handler(request):
 
 # Thumbnail handler with EXIF orientation fix
 async def thumb_handler(request):
+    """
+    GET /thumbs/{size}/{name}
+    size: WIDTHxHEIGHT e.g. 420x0 (0 = preserve aspect)
+    name: basename of file under static/uploads or uploads
+    """
     size = request.match_info.get('size', '')
     name = request.match_info.get('name', '')
     if '..' in name or name.startswith('/'):
@@ -671,6 +677,7 @@ async def thumb_handler(request):
     except Exception:
         raise web.HTTPBadRequest(text="Bad size")
 
+    # prefer ./static/uploads, fallback to ./uploads
     src_path = os.path.join(STATIC_DIR, "uploads", name)
     if not os.path.isfile(src_path):
         src_path = os.path.join(BASE_DIR, "uploads", name)
@@ -681,16 +688,21 @@ async def thumb_handler(request):
     os.makedirs(target_dir, exist_ok=True)
     target_path = os.path.join(target_dir, name)
 
+    # Logging for diagnostics (inserted per patch)
+    log.info("thumb request: size=%s name=%s src_path=%s", size, name, src_path)
+
     if os.path.isfile(target_path):
         return web.FileResponse(target_path)
 
     try:
         with Image.open(src_path) as im:
+            # apply EXIF-based transpose so orientation matches camera/viewer expectation
             try:
                 im = ImageOps.exif_transpose(im)
             except Exception:
                 pass
 
+            # convert transparency to white background for JPEG
             if im.mode in ("RGBA", "LA"):
                 bg = Image.new("RGB", im.size, (255,255,255))
                 bg.paste(im, mask=im.split()[-1])
@@ -716,7 +728,7 @@ async def thumb_handler(request):
                 im.save(tmp)
             os.replace(tmp, target_path)
     except Exception:
-        log.exception("Thumb creation failed for %s", src_path)
+        log.exception("Thumb creation failed for %s -> %s (size=%s)", src_path, target_path, size)
         raise web.HTTPInternalServerError()
 
     return web.FileResponse(target_path)
@@ -740,7 +752,6 @@ async def reload_topics_handler(request):
     except Exception as e:
         log.exception("reload topics failed")
         return web.json_response({"ok": False, "error": str(e)}, status=500)
-
 # Health endpoint
 async def ping(request):
     return web.Response(text="ok")
