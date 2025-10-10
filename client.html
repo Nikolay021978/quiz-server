@@ -1,0 +1,515 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quiz client</title>
+<style>
+:root{
+  --bg:#0b0b0b; --card:#161616; --accent:#0066ff;
+  --ok:#00c853; --bad:#ff1744; --muted:#bdbdbd; --glass: rgba(255,255,255,0.03);
+  --gutter:12px;
+  --control-height:44px;
+}
+*{box-sizing:border-box}
+html, body {
+  overscroll-behavior: none;
+  touch-action: manipulation;
+}
+body{margin:0;font-family:system-ui,Segoe UI,Roboto,Arial;background:var(--bg);color:#fff}
+.container{max-width:1100px;margin:12px auto;padding:16px;display:flex;flex-direction:column;gap:16px}
+
+/* TOP: two columns - original proportions */
+.top-grid{
+  display:grid;
+  grid-template-columns: 1fr 200px;
+  gap:var(--gutter);
+  align-items:center;
+  width:100%;
+}
+.left-stack{display:flex;flex-direction:column;gap:var(--gutter)}
+.right-stack{display:flex;flex-direction:column;gap:var(--gutter);align-items:stretch;justify-content:center}
+
+/* fields — keep same height as name input */
+.field input, .field select{
+  height: var(--control-height);
+  line-height: normal;
+  width:100%;padding:0 12px;border-radius:10px;border:0;background:var(--glass);color:#fff;font-size:15px;
+  display:flex;align-items:center;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+
+/* placeholder text color for inputs */
+.field input::placeholder{ color: rgba(255,255,255,0.6); }
+
+/* for select 'placeholder' option styling */
+.field select.option-placeholder { color: rgba(255,255,255,0.6); }
+
+/* buttons */
+.btn{
+  height: var(--control-height);
+  border-radius:10px;border:0;font-size:15px;cursor:pointer;padding:0 14px;
+  display:inline-flex;align-items:center;justify-content:center;
+}
+.btn.full{width:100%}
+#join{background:var(--accent);color:#fff}
+#start{background:#22c55e;color:#fff}
+#rating{background:#ffb300;color:#111}
+
+/* Card / question area */
+.card{padding:18px;background:var(--card);border-radius:12px;margin-top:8px;display:flex;flex-direction:column;gap:12px}
+.qtext{font-size:20px;text-align:center;margin:6px 0}
+.meta{font-size:13px;color:var(--muted);text-align:center}
+.image-wrap{text-align:center}
+.image-wrap img{max-width:100%;height:auto;border-radius:8px}
+.progress{height:12px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden;margin:8px auto 12px auto;width:100%}
+.progress>i{display:block;height:100%;background:linear-gradient(90deg,#ef5350,#29b6f6);width:0%;transition:width 300ms linear}
+
+.choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:0 auto;width:100%;max-width:920px}
+.choice{padding:14px;border-radius:12px;font-weight:800;color:#fff;text-align:center;cursor:pointer;user-select:none;outline:none;box-shadow:0 6px 18px rgba(0,0,0,0.6)}
+.choice.disabled{opacity:0.7;pointer-events:none}.choice.pressed{transform:translateY(3px)}
+.choice.correct{border:4px solid var(--ok)}.choice.wrong{border:4px solid var(--bad)}
+.a{background:#ef5350}.b{background:#ffd54f;color:#111}.c{background:#66bb6a}.d{background:#29b6f6;color:#111}
+
+/* modals */
+.modal{position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:9999}
+.box{background:#101010;padding:18px;border-radius:12px;max-width:760px;width:95%}
+.results-table{width:100%;border-collapse:collapse}
+.results-table th,.results-table td{padding:10px;border-bottom:1px solid rgba(255,255,255,0.03);text-align:left}
+.result-1{background:linear-gradient(90deg,rgba(255,215,0,0.08),transparent)}
+
+.flash-controls{display:flex;gap:8px;justify-content:center}
+.flash-controls button{height:40px;border-radius:8px;padding:0 10px}
+
+/* Responsive adjustments (original proportions) */
+@media (max-width:920px){
+  .top-grid{grid-template-columns: minmax(140px, 0.62fr) minmax(80px, 120px);gap:10px}
+  .container{padding:12px}
+  :root{--control-height:42px}
+  .btn{font-size:14px}
+  .field input,.field select{font-size:14px}
+}
+@media (max-width:720px){
+  .top-grid{grid-template-columns: minmax(120px, 1fr) minmax(70px, 100px);gap:8px;align-items:center}
+  .right-stack{gap:8px}
+  :root{--control-height:40px}
+  .btn{font-size:13px;padding:0 10px}
+  .field input,.field select{font-size:13px}
+  .container{padding:10px}
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="top-grid">
+    <div class="left-stack">
+      <div class="field">
+        <input id="name" placeholder="Ваше имя" aria-label="Ваше имя">
+      </div>
+
+      <!-- Формат: placeholder внутри поля -->
+      <div class="field">
+        <select id="format" aria-label="Выбор формата" class="option-placeholder">
+          <option value="" disabled selected>Выбор формата</option>
+          <option value="game">Игра</option>
+          <option value="study">Обучение</option>
+        </select>
+      </div>
+
+      <!-- Тема: placeholder внутри поля (single select для корректного placeholder) -->
+      <div class="field">
+        <select id="topic" aria-label="Выбор темы" class="option-placeholder">
+          <option value="" disabled selected>Выбор темы</option>
+        </select>
+      </div>
+
+      <div class="field" id="studyMethodRow" style="display:none">
+        <select id="studyMethod" aria-label="Метод обучения" class="option-placeholder">
+          <option value="" disabled selected>Метод обучения</option>
+          <option value="flashcards">Flashcards</option>
+          <option value="matching">Matching</option>
+          <option value="typing">Typing</option>
+          <option value="spaced">Spaced</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="right-stack">
+      <button id="join" class="btn full">Connect</button>
+      <button id="start" class="btn full">Старт</button>
+      <button id="rating" class="btn full">Рейтинг</button>
+    </div>
+  </div>
+
+  <div class="card" id="gameCard" aria-live="polite">
+    <div class="qtext" id="qtext">Ожидание игры...</div>
+    <div class="meta" id="metaInQ">Вопросов в игре: 0</div>
+    <div class="image-wrap" id="imageWrap" style="display:none"></div>
+
+    <div class="progress" id="progress" style="display:none"><i id="progressBar"></i></div>
+
+    <div class="choices" id="choices" aria-hidden="true">
+      <div class="choice a" id="c0">A</div>
+      <div class="choice b" id="c1">B</div>
+      <div class="choice c" id="c2">C</div>
+      <div class="choice d" id="c3">D</div>
+    </div>
+
+    <div id="studyArea" style="display:none">
+      <div id="flashCard" style="text-align:center">
+        <div id="cardTerm" style="font-size:22px;font-weight:700;margin:12px 0"></div>
+        <div id="cardDef" style="font-size:18px;color:var(--muted);display:none"></div>
+        <div class="flash-controls">
+          <button id="showAnswer" class="btn">Показать ответ</button>
+          <button id="knowBtn" class="btn" style="background:var(--ok)">Знаю</button>
+          <button id="dontKnowBtn" class="btn" style="background:var(--bad)">Не знаю</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="playersBox" style="margin-top:12px;color:var(--muted)"></div>
+  </div>
+</div>
+
+<!-- Ratings modal -->
+<div id="ratingsModal" class="modal"><div class="box">
+  <div style="display:flex;justify-content:space-between;align-items:center"><h3 id="ratingsTitle" style="margin:0">Рейтинг</h3><button id="closeRatings" class="btn" style="height:36px">Закрыть</button></div>
+  <table class="results-table" id="ratingsTable"><thead><tr><th>#</th><th>Игрок</th><th>Очки</th><th>Верных</th></tr></thead><tbody id="ratingsBody"></tbody></table>
+</div></div>
+
+<!-- Final modal -->
+<div id="finalModal" class="modal"><div class="box">
+  <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Итоги игры</h3><button id="closeFinal" class="btn" style="height:36px">Закрыть</button></div>
+  <table class="results-table" id="finalTable"><thead><tr><th>#</th><th>Игрок</th><th>Очки</th><th>Верных</th></tr></thead><tbody id="finalBody"></tbody></table>
+</div></div>
+
+<script>
+/* Prevent pull-to-refresh on iOS Safari */
+(function disablePullToRefresh() {
+  let startY = 0;
+  let maybePrevent = false;
+
+  document.addEventListener('touchstart', function(e) {
+    if (e.touches.length !== 1) return;
+    startY = e.touches[0].screenY;
+    maybePrevent = (window.scrollY === 0);
+  }, {passive: true});
+
+  document.addEventListener('touchmove', function(e) {
+    if (!maybePrevent) return;
+    const curY = e.touches[0].screenY;
+    const deltaY = curY - startY;
+    if (deltaY > 10) {
+      e.preventDefault();
+    }
+  }, {passive: false});
+})();
+
+// Prevent common keyboard refresh shortcuts (F5, Ctrl+R / Cmd+R)
+window.addEventListener('keydown', function(e) {
+  if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'r')) {
+    e.preventDefault();
+  }
+});
+
+/* Full client JS: WebSocket, events, UI updates */
+const TURN_TIME = 12;
+const nameInput = document.getElementById('name');
+const joinBtn = document.getElementById('join');
+const startBtn = document.getElementById('start');
+const ratingBtn = document.getElementById('rating');
+const topicSelect = document.getElementById('topic');
+const formatSelect = document.getElementById('format');
+const studyMethodRow = document.getElementById('studyMethodRow');
+const studyMethodSelect = document.getElementById('studyMethod');
+const qtext = document.getElementById('qtext');
+const metaInQ = document.getElementById('metaInQ');
+const imageWrap = document.getElementById('imageWrap');
+const progress = document.getElementById('progress');
+const progressBar = document.getElementById('progressBar');
+const choicesEls = [document.getElementById('c0'),document.getElementById('c1'),document.getElementById('c2'),document.getElementById('c3')];
+const playersBox = document.getElementById('playersBox');
+
+const ratingsModal = document.getElementById('ratingsModal');
+const ratingsBody = document.getElementById('ratingsBody');
+const closeRatings = document.getElementById('closeRatings');
+
+const finalModal = document.getElementById('finalModal');
+const finalBody = document.getElementById('finalBody');
+const closeFinal = document.getElementById('closeFinal');
+
+const studyArea = document.getElementById('studyArea');
+const flashCard = document.getElementById('flashCard');
+const cardTerm = document.getElementById('cardTerm');
+const cardDef = document.getElementById('cardDef');
+const showAnswer = document.getElementById('showAnswer');
+const knowBtn = document.getElementById('knowBtn');
+const dontKnowBtn = document.getElementById('dontKnowBtn');
+
+let ws = null;
+let showPlayers = false;
+let amIAdmin = false;
+let lastTurnTime = TURN_TIME;
+let currentStudyCardId = null;
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+function setAdminVisible(v){ amIAdmin = !!v; startBtn.style.display = v ? 'inline-block' : 'none'; ratingBtn.style.display = v ? 'inline-block' : 'none'; }
+
+function populateTopics(topics, current){
+  // replace options but keep placeholder if present
+  const prev = topicSelect.value || "";
+  topicSelect.innerHTML = '<option value="" disabled selected>Выбор темы</option>';
+  topics.forEach(t => {
+    const opt = document.createElement('option'); opt.value = t; opt.textContent = t;
+    if(t === current) opt.selected = true;
+    topicSelect.appendChild(opt);
+  });
+}
+
+function getSelectedTopics(){
+  // single-select returns one or default
+  const v = topicSelect.value;
+  return v ? [v] : [];
+}
+
+function showPlayersList(names){
+  if(!showPlayers) return;
+  playersBox.innerHTML = '<strong>Присоединившиеся:</strong><ul>' + (names||[]).map(n => '<li>' + escapeHtml(n) + '</li>').join('') + '</ul>';
+  playersBox.style.display = 'block';
+}
+function hidePlayersList(){ playersBox.style.display='none'; playersBox.innerHTML=''; }
+
+function enableChoices(){
+  choicesEls.forEach(el => { el.classList.remove('disabled','pressed','correct','wrong'); el.style.pointerEvents='auto'; el.style.opacity='1'; });
+  progress.style.display = 'block';
+  progressBar.style.width = '100%';
+}
+function disableChoices(){
+  choicesEls.forEach(el => { el.classList.add('disabled'); el.style.pointerEvents='none'; });
+  progress.style.display = 'none';
+}
+
+function onChoiceClick(idx){
+  if(!ws || ws.readyState !== 1) return;
+  choicesEls.forEach(el=>el.classList.remove('pressed'));
+  choicesEls[idx].classList.add('pressed');
+  ws.send(JSON.stringify({type:'answer', choice: idx}));
+  disableChoices();
+}
+
+joinBtn.addEventListener('click', () => {
+  const name = nameInput.value.trim(); if(!name){ alert('Введите имя'); return; }
+  if(ws && ws.readyState === 1){ alert('Уже подключены'); return; }
+  try{ ws = new WebSocket(location.origin.replace(/^http/, 'ws') + '/ws'); } catch(e){ alert('Ошибка WebSocket'); return; }
+  showPlayers = true;
+  ws.onopen = ()=> { ws.send(JSON.stringify({type:'join', name})); };
+  ws.onmessage = ev => { try{ const m = JSON.parse(ev.data); handleMessage(m); }catch(e){} };
+  ws.onclose = ()=> { showPlayers=false; hidePlayersList(); ws=null; };
+  ws.onerror = ()=> {};
+});
+
+startBtn.addEventListener('click', () => {
+  if(!ws || ws.readyState !== 1){ alert('Нет соединения с сервером'); return; }
+  if(!amIAdmin){ alert('Только админ может стартовать игру'); return; }
+  const format = formatSelect.value || 'game';
+  const topics = getSelectedTopics();
+  const payload = {type:'start_game', format, topics};
+  if(format === 'study') payload.study_method = studyMethodSelect.value || 'flashcards';
+  ws.send(JSON.stringify(payload));
+  metaInQ.textContent = '';
+  showPlayers = false;
+  hidePlayersList();
+});
+
+ratingBtn.addEventListener('click', () => {
+  if(!ws || ws.readyState !== 1){ alert('Нет соединения с сервером'); return; }
+  ws.send(JSON.stringify({type:'get_ratings'}));
+});
+
+closeRatings.addEventListener('click', ()=>{ ratingsModal.style.display = 'none'; });
+closeFinal.addEventListener('click', ()=>{ finalModal.style.display = 'none'; });
+
+topicSelect.addEventListener('change', () => { /* nothing */ });
+
+choicesEls.forEach((el, idx) => el.addEventListener('click', () => onChoiceClick(idx)));
+
+formatSelect.addEventListener('change', () => {
+  if(formatSelect.value === 'study'){
+    studyMethodRow.style.display = 'block';
+  } else {
+    studyMethodRow.style.display = 'none';
+  }
+});
+
+function updateProgress(remaining, total){
+  const t = total || lastTurnTime || TURN_TIME;
+  const pct = Math.max(0, (remaining / t) * 100);
+  progressBar.style.width = pct + '%';
+  if(remaining <= 0) progress.style.display = 'none'; else progress.style.display = 'block';
+}
+
+function setQuestion(textOrDefinition, choices, turn_time, imageSrc){
+  studyArea.style.display = 'none';
+  enableChoices();
+  if(imageSrc){
+    imageWrap.innerHTML = '<img src="'+escapeHtml(imageSrc)+'" alt="img">';
+    imageWrap.style.display = 'block';
+    qtext.textContent = '';
+  } else {
+    imageWrap.style.display = 'none';
+    qtext.textContent = textOrDefinition || '';
+  }
+  for(let i=0;i<4;i++){
+    const text = choices && choices[i] ? choices[i] : '';
+    choicesEls[i].textContent = String.fromCharCode(65+i) + ': ' + text;
+  }
+  lastTurnTime = turn_time || TURN_TIME;
+  progressBar.style.width = '100%';
+  progress.style.display = 'block';
+}
+
+function applyTurnResult(correctIndex, results){
+  for(let i=0;i<4;i++){
+    choicesEls[i].classList.remove('pressed','wrong','correct');
+    choicesEls[i].style.opacity = (i === correctIndex ? '1' : '0.6');
+  }
+  if(Number.isInteger(correctIndex) && choicesEls[correctIndex]){
+    choicesEls[correctIndex].classList.add('correct');
+  }
+  const pressed = document.querySelector('.choice.pressed');
+  if(pressed){
+    const pressedIdx = choicesEls.indexOf(pressed);
+    if(pressedIdx !== -1 && pressedIdx !== correctIndex){
+      choicesEls[pressedIdx].classList.add('wrong');
+    }
+  }
+  disableChoices();
+}
+
+function renderFinalTable(finalList){
+  finalBody.innerHTML = '';
+  (finalList || []).forEach((item, idx) => {
+    const tr = document.createElement('tr');
+    let cls = '';
+    let medal = '';
+    if(idx === 0){ cls = 'result-1'; medal = '🏆 '; }
+    else if(idx === 1){ medal = '🥈 '; }
+    else if(idx === 2){ medal = '🥉 '; }
+    tr.className = cls;
+    tr.innerHTML = '<td>' + (idx+1) + '</td>'
+                 + '<td>' + medal + escapeHtml(item.name || '') + '</td>'
+                 + '<td>' + (item.points||0) + '</td>'
+                 + '<td>' + (item.correct||0) + '</td>';
+    finalBody.appendChild(tr);
+  });
+  finalModal.style.display = 'flex';
+}
+
+function renderRatings(ratings, topic){
+  ratingsBody.innerHTML = '';
+  (ratings || []).forEach((r, idx) => {
+    const tr = document.createElement('tr');
+    let medal = '';
+    if(idx === 0) medal = '🏆 ';
+    else if(idx === 1) medal = '🥈 ';
+    else if(idx === 2) medal = '🥉 ';
+    tr.innerHTML = '<td>' + (idx+1) + '</td>'
+                 + '<td>' + medal + escapeHtml(r.name || '') + '</td>'
+                 + '<td>' + (r.total_points||0) + '</td>'
+                 + '<td>' + (r.total_correct||0) + '</td>';
+    ratingsBody.appendChild(tr);
+  });
+  ratingsModal.style.display = 'flex';
+}
+
+/* Study UI handlers */
+showAnswer.addEventListener('click', () => {
+  cardDef.style.display = 'block';
+});
+knowBtn.addEventListener('click', () => {
+  if(!ws || ws.readyState !== 1 || !currentStudyCardId) return;
+  ws.send(JSON.stringify({type:'study_feedback', card_id: currentStudyCardId, result:'ok'}));
+  currentStudyCardId = null;
+  cardTerm.textContent = '';
+  cardDef.textContent = '';
+  cardDef.style.display = 'none';
+});
+dontKnowBtn.addEventListener('click', () => {
+  if(!ws || ws.readyState !== 1 || !currentStudyCardId) return;
+  ws.send(JSON.stringify({type:'study_feedback', card_id: currentStudyCardId, result:'wrong'}));
+  currentStudyCardId = null;
+  cardTerm.textContent = '';
+  cardDef.textContent = '';
+  cardDef.style.display = 'none';
+});
+
+function handleMessage(msg){
+  if(!msg || typeof msg !== 'object') return;
+  if(msg.type === 'joined'){
+    setAdminVisible(!!msg.is_admin);
+    if(msg.topics) populateTopics(msg.topics, msg.topic || '');
+    if(msg.num_questions != null) metaInQ.textContent = 'Вопросов в игре: ' + msg.num_questions;
+    return;
+  }
+  if(msg.type === 'lobby'){
+    if(msg.topics) populateTopics(msg.topics, msg.topic || '');
+    if(msg.num_questions != null) metaInQ.textContent = 'Вопросов в игре: ' + msg.num_questions;
+    if(showPlayers) showPlayersList(msg.players || []);
+    return;
+  }
+  if(msg.type === 'game_started'){
+    metaInQ.textContent = '';
+    hidePlayersList();
+    enableChoices();
+    return;
+  }
+  if(msg.type === 'new_question'){
+    const imageSrc = msg.image_thumb || msg.image || null;
+    setQuestion(msg.definition || msg.term || '', msg.choices || [], msg.turn_time || TURN_TIME, imageSrc);
+    return;
+  }
+  if(msg.type === 'tick'){
+    updateProgress(msg.remaining != null ? msg.remaining : 0, msg.turn_time || lastTurnTime);
+    return;
+  }
+  if(msg.type === 'turn_result'){
+    applyTurnResult(msg.correct_index, msg.results || []);
+    return;
+  }
+  if(msg.type === 'game_over'){
+    renderFinalTable(msg.leaderboard || []);
+    return;
+  }
+  if(msg.type === 'ratings'){
+    renderRatings(msg.ratings || [], msg.topic || '');
+    return;
+  }
+  if(msg.type === 'study_started'){
+    studyArea.style.display = 'block';
+    qtext.textContent = 'Режим обучения: ' + (msg.method || '');
+    return;
+  }
+  if(msg.type === 'study_card'){
+    studyArea.style.display = 'block';
+    showAnswer.style.display = 'inline-block';
+    cardDef.style.display = 'none';
+    cardTerm.textContent = msg.term || '';
+    cardDef.textContent = msg.definition || '';
+    currentStudyCardId = msg.card_id || null;
+    return;
+  }
+  if(msg.type === 'study_result'){
+    return;
+  }
+  if(msg.type === 'study_summary'){
+    renderFinalTable(msg.stats || []);
+    return;
+  }
+}
+
+window.addEventListener('beforeunload', () => { try{ if(ws) ws.close(); } catch(e){} });
+</script>
+</body>
+</html>
