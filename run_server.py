@@ -1,19 +1,9 @@
 #!/usr/bin/env python3
 # run_server.py
-#
-# Quiz server with topics stored in ./topics/*.json
-# - HTTP + WebSocket (aiohttp)
-# - Client UI served from client.html in repo or embedded fallback
-# - Supports image questions: payload.image (full) and payload.image_thumb (generated thumbnail)
-# - Generates cached thumbnails with EXIF orientation fix (Pillow)
-# - Endpoint POST /api/reload-topics to reload topics at runtime
-# - Supports multi-topic games and a Study mode with multiple study methods
-#
-# Usage:
-#   python run_server.py --host 0.0.0.0 --http-port 8000
-#
+# Quiz server (loads topics only from topics/quiz)
 # Requires: aiohttp, pillow
-# Install: python -m pip install aiohttp pillow
+
+from __future__ import annotations
 
 import argparse
 import asyncio
@@ -26,8 +16,9 @@ import time
 import glob
 import pathlib
 import uuid
-from collections import OrderedDict, deque
-from typing import Dict, Optional, List, Tuple, Deque
+import unicodedata
+from collections import OrderedDict
+from typing import Dict, Optional, List, Tuple
 
 from aiohttp import web, WSMsgType
 from PIL import Image, ImageOps
@@ -35,29 +26,39 @@ from PIL import Image, ImageOps
 # ---------------------------
 # Configuration
 # ---------------------------
-TURN_TIME = 12
+TURN_TIME_QUIZ = 15
+TURN_TIME_DEFAULT = 30
 ROUND_DELAY = 0.8
-RESTART_DELAY = 2.0
 NUM_QUESTIONS = 5
 
+THUMB_SIZE = "200x200"
+
 BASE_DIR = os.path.dirname(__file__) or "."
-STATIC_DIR = os.path.join(BASE_DIR, "static")  # serve static files from ./static
+STATIC_DIR = os.path.join(BASE_DIR, "static")
 TOPICS_DIR = os.path.join(BASE_DIR, "topics")
+QUIZ_SUBDIR = os.path.join(TOPICS_DIR, "quiz")
 RATINGS_FILE = os.path.join(BASE_DIR, "ratings.json")
-THUMBS_DIR = os.path.join(STATIC_DIR, "thumbs")
+
+QUIZ_UPLOADS_DIR = os.path.join(STATIC_DIR, "quiz", "uploads")
+QUIZ_THUMBS_DIR = os.path.join(STATIC_DIR, "quiz", "thumbs")
+
 DEFAULT_WS_PATH = "/ws"
 DEFAULT_INDEX = "client.html"
 
-# Scoring
 BASE_POINTS = 1000
 MAX_SPEED_BONUS = 1000
 MAX_STREAK_MULT = 3
 
-# Ensure folders exist
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_PIXELS = 10000 * 10000
+MAX_THUMB_DIM = 5000
+
+# ensure directories exist
 os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(TOPICS_DIR, exist_ok=True)
-os.makedirs(os.path.join(STATIC_DIR, "uploads"), exist_ok=True)
-os.makedirs(THUMBS_DIR, exist_ok=True)
+os.makedirs(QUIZ_SUBDIR, exist_ok=True)
+os.makedirs(QUIZ_UPLOADS_DIR, exist_ok=True)
+os.makedirs(QUIZ_THUMBS_DIR, exist_ok=True)
 
 # ---------------------------
 # Logging
@@ -66,15 +67,40 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("quizserver")
 
 # ---------------------------
-# Topics loading helpers
+# Helpers: topics and images
 # ---------------------------
-def _ensure_topics_dir():
+def _ensure_topics_dir() -> None:
     try:
         os.makedirs(TOPICS_DIR, exist_ok=True)
+        os.makedirs(QUIZ_SUBDIR, exist_ok=True)
     except Exception:
-        log.exception("Failed to ensure topics dir %s", TOPICS_DIR)
+        log.exception("Failed to ensure topics dirs")
 
-def _load_single_topic_file(path: str) -> Optional[Tuple[str, List[Tuple[str, str]]]]:
+def _normalize_image_path(img: str) -> str:
+    img = str(img).strip()
+    if not img:
+        return ""
+    if img.startswith("/"):
+        return img
+    if img.startswith("http://") or img.startswith("https://"):
+        return img
+    return f"/static/quiz/uploads/{os.path.basename(img)}"
+
+def _is_image_path(s: Optional[str]) -> bool:
+    if not s or not isinstance(s, str):
+        return False
+    s = s.strip()
+    if not s:
+        return False
+    lower = s.lower()
+    if lower.startswith("/static/") or lower.startswith("http://") or lower.startswith("https://"):
+        return True
+    for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"):
+        if lower.endswith(ext):
+            return True
+    return False
+
+def _load_single_topic_file(path: str) -> Optional[Tuple[str, List[dict]]]:
     try:
         with open(path, "r", encoding="utf-8") as f:
             doc = json.load(f)
@@ -91,22 +117,42 @@ def _load_single_topic_file(path: str) -> Optional[Tuple[str, List[Tuple[str, st
     else:
         return None
 
-    parsed: List[Tuple[str, str]] = []
+    parsed: List[dict] = []
+    IMAGE_EXTS = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg')
+
     for it in items_raw:
-        if isinstance(it, list) and len(it) >= 2:
-            term = str(it[0])
-            definition = "" if it[1] is None else str(it[1])
-            if term:
-                parsed.append((term, definition))
-        elif isinstance(it, dict):
-            term = it.get("term") or it.get("name") or ""
-            image = it.get("image") or it.get("img")
-            definition = it.get("definition") or it.get("def") or ""
-            if image and isinstance(image, str) and image.strip():
-                parsed.append((str(term), str(image)))
-            else:
-                if term:
-                    parsed.append((str(term), str(definition)))
+        if isinstance(it, dict):
+            d: dict = {}
+            d["term"] = str(it.get("term") or it.get("name") or "")
+            if it.get("image") and isinstance(it.get("image"), str):
+                d["image"] = _normalize_image_path(it.get("image"))
+            d["definition"] = str(it.get("definition") or it.get("def") or "")
+            if "choices" in it and isinstance(it["choices"], list):
+                choices = []
+                for x in it["choices"]:
+                    if isinstance(x, str):
+                        s = x.strip()
+                        if not s:
+                            choices.append(s)
+                            continue
+                        lower = s.lower()
+                        if lower.startswith("http://") or lower.startswith("https://") or s.startswith("/"):
+                            choices.append(s)
+                        elif any(lower.endswith(ext) for ext in IMAGE_EXTS):
+                            choices.append(_normalize_image_path(s))
+                        else:
+                            choices.append(s)
+                    else:
+                        choices.append(str(x))
+                d["choices"] = choices
+            if "correct" in it:
+                try:
+                    d["correct"] = int(it["correct"])
+                except Exception:
+                    d["correct"] = None
+            parsed.append(d)
+        elif isinstance(it, list) and len(it) >= 2:
+            parsed.append({"term": str(it[0]), "definition": str(it[1])})
         else:
             continue
 
@@ -114,24 +160,33 @@ def _load_single_topic_file(path: str) -> Optional[Tuple[str, List[Tuple[str, st
         return None
     return (str(name), parsed)
 
-def load_topics_from_dir() -> Dict[str, List[Tuple[str, str]]]:
+def load_topics_from_dir() -> Dict[str, Dict[str, List[dict]]]:
+    """
+    Strictly load topics only from topics/quiz/*.json into format 'quiz'.
+    Return map: { 'quiz': { topic_name: [items...] } }
+    """
     _ensure_topics_dir()
-    topics: Dict[str, List[Tuple[str, str]]] = {}
-    pattern = os.path.join(TOPICS_DIR, "*.json")
-    for path in sorted(glob.glob(pattern), key=os.path.basename):
+    formats_map: Dict[str, Dict[str, List[dict]]] = {}
+    fm = "quiz"
+    formats_map[fm] = {}
+    pattern = os.path.join(QUIZ_SUBDIR, "*.json")
+    files = sorted(glob.glob(pattern), key=os.path.basename)
+    if not files:
+        log.warning("No JSON files found in %s", QUIZ_SUBDIR)
+    for path in files:
         res = _load_single_topic_file(path)
         if res:
             tname, items = res
-            if tname in topics:
-                log.warning("Duplicate topic name %s from file %s — skipping", tname, path)
+            if tname in formats_map[fm]:
+                log.warning("Duplicate topic name %s in topics/quiz — skipping %s", tname, path)
                 continue
-            topics[tname] = items
-            sample_img_count = sum(1 for _, d in items if isinstance(d, str) and d.startswith('/static/'))
-            log.info("Loaded topic '%s' (%d items, %d image-paths) from %s", tname, len(items), sample_img_count, path)
-    return topics
+            formats_map[fm][tname] = items
+            img_count = sum(1 for it in items if isinstance(it.get("image"), str) and it.get("image"))
+            log.info("Loaded topic '%s' (%d items, %d images) into format 'quiz' from %s", tname, len(items), img_count, path)
+    return formats_map
 
 # ---------------------------
-# Ratings persistence helpers
+# Ratings persistence
 # ---------------------------
 ratings_lock = asyncio.Lock()
 
@@ -142,13 +197,36 @@ def _ensure_ratings_file():
                 json.dump({}, f)
         except Exception:
             log.exception("Failed to create ratings file")
+            raise
 
 async def load_ratings() -> Dict[str, Dict[str, Dict[str, int]]]:
     async with ratings_lock:
         _ensure_ratings_file()
         try:
+            try:
+                size = os.path.getsize(RATINGS_FILE)
+            except Exception:
+                size = 0
+            if size == 0:
+                return {}
+            if size > 5 * 1024 * 1024:
+                log.warning("ratings.json too large, ignoring content")
+                return {}
             with open(RATINGS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
+                try:
+                    data = json.load(f)
+                except json.JSONDecodeError:
+                    log.exception("ratings.json contains invalid JSON; resetting file")
+                    try:
+                        tmp = RATINGS_FILE + f".corrupt-{os.getpid()}-{uuid.uuid4().hex}"
+                        with open(tmp, "w", encoding="utf-8") as tf:
+                            json.dump({}, tf, ensure_ascii=False, indent=2)
+                            tf.flush()
+                            os.fsync(tf.fileno())
+                        os.replace(tmp, RATINGS_FILE)
+                    except Exception:
+                        log.exception("failed to repair ratings.json")
+                    return {}
                 return data if isinstance(data, dict) else {}
         except Exception:
             log.exception("Failed to load ratings.json")
@@ -160,28 +238,46 @@ async def save_ratings(ratings: Dict[str, Dict[str, Dict[str, int]]]):
             tmp = RATINGS_FILE + f".tmp-{os.getpid()}-{uuid.uuid4().hex}"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(ratings, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, RATINGS_FILE)
         except Exception:
             log.exception("Failed to save ratings.json")
 
-async def update_ratings_after_game(topic: str, per_player_final: List[Dict]):
+async def update_ratings_after_game(format_name: str, topic: str, per_player_final: List[Dict]):
+    if not isinstance(format_name, str) or not isinstance(topic, str):
+        return
+    if not per_player_final:
+        return
     ratings = await load_ratings()
-    topic_map = ratings.get(topic, {})
+    map_key = f"{format_name}|{topic}"
+    topic_map = ratings.get(map_key, {})
+    if not isinstance(topic_map, dict):
+        topic_map = {}
     for r in per_player_final:
-        name = r.get("name")
-        if not name:
+        name = r.get("name") or r.get("player") or None
+        if not name or not isinstance(name, str):
             continue
+        try:
+            pts = int(r.get("points", r.get("total_points", 0) or 0))
+        except Exception:
+            pts = 0
+        try:
+            correct = int(r.get("correct", r.get("total_correct", 0) or 0))
+        except Exception:
+            correct = 0
         entry = topic_map.get(name, {"total_points": 0, "games": 0, "total_correct": 0})
-        entry["total_points"] = entry.get("total_points", 0) + int(r.get("points", 0))
+        entry["total_points"] = entry.get("total_points", 0) + pts
         entry["games"] = entry.get("games", 0) + 1
-        entry["total_correct"] = entry.get("total_correct", 0) + int(r.get("correct", 0))
+        entry["total_correct"] = entry.get("total_correct", 0) + correct
         topic_map[name] = entry
-    ratings[topic] = topic_map
+    ratings[map_key] = topic_map
     await save_ratings(ratings)
 
-async def get_ratings_for_topic(topic: str, top_n: Optional[int] = None) -> List[Dict]:
+async def get_ratings_for_format_topic(format_name: str, topic: str, top_n: Optional[int] = None) -> List[Dict]:
     ratings = await load_ratings()
-    topic_map = ratings.get(topic, {})
+    map_key = f"{format_name}|{topic}"
+    topic_map = ratings.get(map_key, {}) or {}
     items = []
     for name, stats in topic_map.items():
         items.append({
@@ -196,28 +292,52 @@ async def get_ratings_for_topic(topic: str, top_n: Optional[int] = None) -> List
     return items
 
 # ---------------------------
+# Safe websocket send helper
+# ---------------------------
+async def _safe_send_ws(ws, data: str, send_timeout: float = 1.0, close_timeout: float = 0.5) -> bool:
+    try:
+        await asyncio.wait_for(ws.send_str(data), timeout=send_timeout)
+        return True
+    except (asyncio.TimeoutError, RuntimeError, ConnectionError):
+        log.debug("ws send timeout/conn error")
+    except Exception:
+        log.debug("ws send exception", exc_info=True)
+
+    try:
+        await asyncio.wait_for(ws.close(), timeout=close_timeout)
+    except Exception:
+        try:
+            await ws.close()
+        except Exception:
+            pass
+    return False
+
+# ---------------------------
 # Game state & logic
 # ---------------------------
 class Player:
-    def __init__(self, name: str, ws: web.WebSocketResponse):
+    def __init__(self, name: str, ws):
         self.name = name
         self.ws = ws
         self.score = 0
         self.points = 0
         self.streak = 0
         self.join_ts = time.time()
-        # study-specific queue (deque of card dicts)
-        self.study_queue: Deque[Dict] = deque()
-        self.study_stats = {"seen": 0, "correct": 0}
+        self.last_answer_ts = 0.0
+
+    def __repr__(self):
+        return f"<Player {self.name} pts={self.points} score={self.score}>"
 
 class QuizServer:
-    def __init__(self, topics_map: Dict[str, List[Tuple[str, str]]]):
+    def __init__(self, topics_by_format: Dict[str, Dict[str, List[dict]]]):
         self.players: "OrderedDict[str, Player]" = OrderedDict()
         self.lock = asyncio.Lock()
-        self.topics_map = topics_map or {}
-        self.available_topics = list(self.topics_map.keys())
+        self.topics_by_format = topics_by_format or {}
+        self.available_formats = list(self.topics_by_format.keys())
+        self.current_format: str = self.available_formats[0] if self.available_formats else "quiz"
+        self.available_topics = list(self.topics_by_format.get(self.current_format, {}).keys())
         self.current_topic: str = self.available_topics[0] if self.available_topics else ""
-        self.questions: List[Tuple[str, str]] = self._prepare_questions([self.current_topic]) if self.current_topic else []
+        self.questions: List[Tuple[str, str]] = self._prepare_questions([self.current_topic], self.current_format) if self.current_topic else []
         self.current_qidx: int = 0
         self.current_choices: Optional[List[str]] = None
         self.current_correct: Optional[int] = None
@@ -226,80 +346,153 @@ class QuizServer:
         self.admin: Optional[str] = None
         self._game_task: Optional[asyncio.Task] = None
         self.current_question_start_ts: Optional[float] = None
-        # mapping question index -> source topic (for per-topic stats)
         self._q_topics: Dict[int, str] = {}
 
-        self._all_terms: List[str] = []
-        for items in self.topics_map.values():
-            for t, _ in items:
-                if t not in self._all_terms:
-                    self._all_terms.append(t)
-
-    def _prepare_questions(self, topics: Optional[List[str]]) -> List[Tuple[str, str]]:
-        pool: List[Tuple[str, str, str]] = []  # (term, definition, topic)
-        selected = topics or [self.current_topic] if self.current_topic else list(self.available_topics)
+    def _prepare_questions(self, topics: Optional[List[str]], fmt: Optional[str] = None) -> List[Tuple[str, str]]:
+        fmt = fmt or self.current_format
+        pool: List[Tuple[str, str, str]] = []
+        selected = topics or ([self.current_topic] if self.current_topic else list(self.topics_by_format.get(fmt, {}).keys()))
         for t in selected:
-            for term, definition in self.topics_map.get(t, []):
+            items = self.topics_by_format.get(fmt, {}).get(t, [])
+            if not items:
+                log.debug("_prepare_questions: no items for topic=%s format=%s", t, fmt)
+            for item in items:
+                term = item.get("term", "") or item.get("name", "")
+                definition = item.get("definition", "") or item.get("def") or ""
                 pool.append((term, definition, t))
         if not pool:
+            log.warning("_prepare_questions: empty pool for fmt=%s topics=%s", fmt, selected)
+            self._q_topics = {}
             return []
         k = min(len(pool), NUM_QUESTIONS)
         sampled = random.sample(pool, k=k)
-        # store topics mapping
         self._q_topics = {i: sampled[i][2] for i in range(len(sampled))}
+        log.info("_prepare_questions: selected %d questions for fmt=%s topics=%s", len(sampled), fmt, selected)
         return [(s[0], s[1]) for s in sampled]
 
     async def send(self, player: Player, msg: dict):
         try:
-            await player.ws.send_str(json.dumps(msg))
+            js = json.dumps(msg, ensure_ascii=False)
         except Exception:
-            log.debug("send failed to %s", player.name)
+            log.exception("Failed to encode JSON for sending to %s", player.name)
+            return
+        try:
+            ok = await _safe_send_ws(player.ws, js)
+            if not ok:
+                log.debug("send: marking %s as dead", player.name)
+                async with self.lock:
+                    if player.name in self.players:
+                        try:
+                            await asyncio.wait_for(player.ws.close(), 1.0)
+                        except Exception:
+                            pass
+                        try:
+                            del self.players[player.name]
+                        except KeyError:
+                            pass
+                try:
+                    await self.broadcast_lobby()
+                except Exception:
+                    log.exception("broadcast_lobby failed after send removal")
+        except Exception:
+            log.debug("send unexpected failure to %s", player.name, exc_info=True)
 
     async def broadcast(self, msg: dict):
-        js = json.dumps(msg)
-        dead = []
+        try:
+            js = json.dumps(msg, ensure_ascii=False)
+        except Exception:
+            log.exception("broadcast: failed to json-encode message")
+            return
+
         async with self.lock:
-            players = list(self.players.items())
-        for name, pl in players:
-            try:
-                await pl.ws.send_str(js)
-            except Exception:
-                dead.append(name)
+            players_items = list(self.players.items())
+        if not players_items:
+            return
+
+        # fixed parallelism: avoid unbounded factor growth
+        parallel_limit = min(20, max(3, len(players_items)))
+        sem = asyncio.Semaphore(parallel_limit)
+
+        async def _send_and_report(name, pl):
+            async with sem:
+                try:
+                    ok = await _safe_send_ws(pl.ws, js)
+                    return None if ok else name
+                except Exception:
+                    log.debug("broadcast: send exception for %s", name, exc_info=True)
+                    return name
+
+        coros = [_send_and_report(name, pl) for name, pl in players_items]
+        try:
+            results = await asyncio.gather(*coros, return_exceptions=False)
+        except Exception:
+            results = []
+            for name, pl in players_items:
+                try:
+                    ok = await _safe_send_ws(pl.ws, js)
+                    results.append(None if ok else name)
+                except Exception:
+                    results.append(name)
+
+        dead = [r for r in results if r]
         if dead:
             async with self.lock:
                 for d in dead:
-                    if d in self.players:
+                    pl = self.players.pop(d, None)
+                    if pl:
                         try:
-                            await self.players[d].ws.close()
+                            await asyncio.wait_for(pl.ws.close(), timeout=0.5)
                         except Exception:
-                            pass
-                        del self.players[d]
+                            try:
+                                await pl.ws.close()
+                            except Exception:
+                                pass
+                if self.admin not in self.players:
+                    self.admin = next(iter(self.players.keys()), None)
+            try:
+                await self.broadcast_lobby()
+            except Exception:
+                log.exception("broadcast_lobby failed after removing dead players")
 
     async def broadcast_lobby(self):
         async with self.lock:
             players = list(self.players.keys())
             admin = self.admin
-            current_topic = self.current_topic
-            topics = self.available_topics
-        await self.broadcast({
-            "type": "lobby",
-            "players": players,
-            "admin": admin,
-            "topic": current_topic,
-            "topics": topics,
-            "num_questions": NUM_QUESTIONS
-        })
+            current_format = self.current_format
+            formats = self.available_formats
+            topics = list(self.topics_by_format.get(current_format, {}).keys()) or []
+            current_topic = self.current_topic or (topics[0] if topics else "")
+            players_map = dict(self.players)
 
-    async def add_player(self, name: str, ws: web.WebSocketResponse) -> str:
+        for pname, pl in players_map.items():
+            try:
+                payload = {
+                    "type": "lobby",
+                    "players": players,
+                    "admin": admin,
+                    "is_admin": (pname == admin),
+                    "format": current_format,
+                    "formats": formats,
+                    "topics": topics,
+                    "current_topic": current_topic,
+                    "num_questions": NUM_QUESTIONS
+                }
+                await self.send(pl, payload)
+            except Exception:
+                log.exception("broadcast_lobby: failed to send lobby to %s", pname)
+
+    async def add_player(self, name: str, ws) -> str:
         async with self.lock:
-            base = name
             i = 1
-            # normalize and limit name length
             if not isinstance(name, str):
                 name = "player"
-            name = name.strip()[:48]
+            safe = "".join(ch for ch in name if ch.isprintable() and ch not in "\r\n\t")
+            safe = unicodedata.normalize("NFC", safe).strip()[:48] or "player"
+            base = safe
+            name = safe
             while name in self.players:
-                name = f"{base}_{i}"; i += 1
+                name = f"{base}_{i}"
+                i += 1
             pl = Player(name, ws)
             self.players[name] = pl
             if not self.admin:
@@ -310,9 +503,12 @@ class QuizServer:
             "type": "joined",
             "name": name,
             "is_admin": (name == self.admin),
-            "topic": self.current_topic,
-            "topics": self.available_topics,
-            "num_questions": NUM_QUESTIONS
+            "format": self.current_format,
+            "formats": self.available_formats,
+            "topics": list(self.topics_by_format.get(self.current_format, {}).keys()) or [],
+            "current_topic": self.current_topic or "",
+            "num_questions": NUM_QUESTIONS,
+            "players": list(self.players.keys())
         })
         await self.broadcast_lobby()
         return name
@@ -321,7 +517,7 @@ class QuizServer:
         async with self.lock:
             if name in self.players:
                 try:
-                    await self.players[name].ws.close()
+                    await asyncio.wait_for(self.players[name].ws.close(), 1.0)
                 except Exception:
                     pass
                 del self.players[name]
@@ -332,18 +528,33 @@ class QuizServer:
         await self.broadcast_lobby()
 
     async def handle_message(self, name: str, msg: dict):
+        if not isinstance(msg, dict):
+            return
         t = msg.get("type")
+
         if t == "choose_topic":
             topic = msg.get("topic")
             async with self.lock:
                 if name != self.admin:
+                    pl = self.players.get(name)
+                    if pl:
+                        await self.send(pl, {"type":"error", "message":"Только админ может выбрать тему"})
+                    log.info("choose_topic denied: %s is not admin (admin=%s)", name, self.admin)
                     return
                 if self.game_running:
+                    pl = self.players.get(name)
+                    if pl:
+                        await self.send(pl, {"type":"error", "message":"Нельзя менять тему во время игры"})
+                    log.info("choose_topic ignored while game running by %s", name)
                     return
-                if topic not in self.available_topics:
+                if topic not in self.topics_by_format.get(self.current_format, {}):
+                    pl = self.players.get(name)
+                    if pl:
+                        await self.send(pl, {"type":"error", "message":"Неизвестная тема"})
+                    log.warning("choose_topic unknown topic %r by %s", topic, name)
                     return
                 self.current_topic = topic
-                self.questions = self._prepare_questions([self.current_topic])
+                self.questions = self._prepare_questions([self.current_topic], self.current_format)
                 self.current_qidx = 0
             await self.broadcast_lobby()
             return
@@ -351,21 +562,60 @@ class QuizServer:
         if t == "start_game":
             async with self.lock:
                 if name != self.admin:
+                    pl = self.players.get(name)
+                    if pl:
+                        await self.send(pl, {"type":"error", "message":"Только админ может стартовать игру"})
+                    log.info("start_game denied: %s is not admin (admin=%s)", name, self.admin)
                     return
+
                 if self.game_running:
+                    pl = self.players.get(name)
+                    if pl:
+                        await self.send(pl, {"type":"error", "message":"Игра уже запущена"})
+                    log.info("start_game ignored: game already running (requester=%s)", name)
                     return
-                fmt = msg.get("format", "game")
-                topics = msg.get("topics") or [self.current_topic] if self.current_topic else list(self.available_topics)
-                if fmt == "study":
-                    method = msg.get("study_method", "flashcards")
-                    self.game_running = True
-                    self._game_task = asyncio.create_task(self._run_study(method, topics))
-                else:
-                    # normal game
-                    self.questions = self._prepare_questions(topics)
-                    self.current_qidx = 0
-                    self.game_running = True
-                    self._game_task = asyncio.create_task(self._run_game())
+
+                fmt = msg.get("format", "quiz")
+                topics = msg.get("topics")
+
+                if not isinstance(fmt, str) or fmt not in self.topics_by_format:
+                    log.warning("start_game aborted: invalid format requested: %s by %s", fmt, name)
+                    pl = self.players.get(name)
+                    if pl:
+                        await self.send(pl, {"type":"error", "message":"Неверный формат игры"})
+                    return
+
+                if not isinstance(topics, list) or not topics or not all(isinstance(x, str) for x in topics):
+                    log.warning("start_game aborted: topics missing or invalid from %s: %r", name, topics)
+                    pl = self.players.get(name)
+                    if pl:
+                        await self.send(pl, {"type":"error", "message":"Укажите тему(ы) для старта игры"})
+                    return
+
+                invalid = [t for t in topics if t not in self.topics_by_format.get(fmt, {})]
+                if invalid:
+                    log.warning("start_game aborted: unknown topics %s requested by %s", invalid, name)
+                    pl = self.players.get(name)
+                    if pl:
+                        await self.send(pl, {"type":"error", "message":f"Неизвестные темы: {', '.join(invalid)}"})
+                    return
+
+                self.current_format = fmt
+                self.current_topic = topics[0]
+                self.questions = self._prepare_questions(topics, fmt)
+                self.current_qidx = 0
+
+                if not self.questions:
+                    log.warning("start_game aborted: no questions for format=%s topics=%s", fmt, topics)
+                    pl = self.players.get(name)
+                    if pl:
+                        await self.send(pl, {"type":"error", "message":"Нет вопросов для выбранной темы. Проверьте файлы в topics/quiz."})
+                    return
+
+                self.game_running = True
+                self._last_game_context = {"format": fmt, "topics": topics}
+                self._game_task = asyncio.create_task(self._run_quiz())
+                log.info("start_game accepted by %s for format=%s topics=%s", name, fmt, topics)
             return
 
         if t == "answer":
@@ -374,56 +624,87 @@ class QuizServer:
                     return
                 if name in self.answers:
                     return
+                if not self.current_choices:
+                    return
                 choice = msg.get("choice")
                 try:
-                    self.answers[name] = (int(choice), time.time())
+                    ci = int(choice)
                 except Exception:
-                    pass
-            return
-
-        if t == "study_feedback":
-            # { type:"study_feedback", card_id:"...", result:"ok"|"wrong"|"skip", typed: "..." }
-            async with self.lock:
-                player = self.players.get(name)
-                if not player:
                     return
-                if not player.study_queue:
+                if ci < 0 or ci >= len(self.current_choices):
                     return
-                card = player.study_queue[0]
-                result = msg.get("result")
-                player.study_stats["seen"] += 1
-                if result == "ok":
-                    player.study_stats["correct"] += 1
-                # pop front
-                player.study_queue.popleft()
-                try:
-                    await player.ws.send_str(json.dumps({
-                        "type": "study_result",
-                        "card_id": card.get("id"),
-                        "status": "ok" if result == "ok" else "wrong"
-                    }))
-                except Exception:
-                    pass
+                turn_time = TURN_TIME_QUIZ if self.current_format == "quiz" else TURN_TIME_DEFAULT
+                if not self.current_question_start_ts or time.time() - self.current_question_start_ts > (turn_time + 5):
+                    return
+                pl = self.players.get(name)
+                if not pl:
+                    return
+                if time.time() - pl.last_answer_ts < 0.15:
+                    return
+                pl.last_answer_ts = time.time()
+                self.answers[name] = (ci, time.time())
             return
 
         if t == "get_ratings":
-            topic = self.current_topic
-            ratings = await get_ratings_for_topic(topic)
+            req_topic = msg.get("topic")
+            req_format = msg.get("format")
+            chosen_format = None
+            chosen_topic = None
+
+            if isinstance(req_format, str) and isinstance(req_topic, str):
+                if req_format in self.topics_by_format and req_topic in self.topics_by_format.get(req_format, {}):
+                    chosen_format = req_format
+                    chosen_topic = req_topic
+
+            if chosen_topic is None and isinstance(req_topic, str):
+                if req_topic in self.topics_by_format.get(self.current_format, {}):
+                    chosen_format = self.current_format
+                    chosen_topic = req_topic
+
+            if chosen_topic is None and isinstance(req_topic, str):
+                for fm, topics in self.topics_by_format.items():
+                    if req_topic in topics:
+                        chosen_format = fm
+                        chosen_topic = req_topic
+                        break
+
+            if chosen_topic is None:
+                if getattr(self, "current_topic", None) and self.current_topic in self.topics_by_format.get(self.current_format, {}):
+                    chosen_format = self.current_format
+                    chosen_topic = self.current_topic
+
+            ratings = []
+            if chosen_format and chosen_topic:
+                try:
+                    ratings = await get_ratings_for_format_topic(chosen_format, chosen_topic, top_n=200)
+                except Exception:
+                    log.exception("Failed to load ratings for %s|%s", chosen_format, chosen_topic)
+                    ratings = []
+
             if name in self.players:
-                await self.send(self.players[name], {"type": "ratings", "topic": topic, "ratings": ratings})
+                await self.send(self.players[name], {
+                    "type": "ratings",
+                    "format": chosen_format or self.current_format,
+                    "topic": chosen_topic or (req_topic or self.current_topic or ""),
+                    "ratings": ratings
+                })
             return
 
-    async def _run_game(self):
-        async with self.lock:
-            self.current_qidx = 0
-            for p in self.players.values():
-                p.score = 0
-                p.points = 0
-                p.streak = 0
-        await self.broadcast({"type": "game_started", "topic": self.current_topic, "num_questions": NUM_QUESTIONS})
-
-        total = len(self.questions)
+    # ---------------------------
+    # Quiz implementation
+    # ---------------------------
+    async def _run_quiz(self):
         try:
+            async with self.lock:
+                self.current_qidx = 0
+                for p in self.players.values():
+                    p.score = 0
+                    p.points = 0
+                    p.streak = 0
+            await self.broadcast({"type": "game_started", "format": "quiz", "topic": self.current_topic, "num_questions": NUM_QUESTIONS})
+
+            total = len(self.questions)
+            turn_time = TURN_TIME_QUIZ
             while True:
                 async with self.lock:
                     if not self.players:
@@ -431,106 +712,188 @@ class QuizServer:
                         break
                     if self.current_qidx >= total:
                         break
+
                     term, definition = self.questions[self.current_qidx]
-
-                    # --- Формирование вариантов только из соответствующей темы ---
                     q_topic = self._q_topics.get(self.current_qidx, self.current_topic)
-                    same_topic_terms = [t for t, _ in self.topics_map.get(q_topic, []) if t != term]
-                    random.shuffle(same_topic_terms)
 
-                    wrong_choices = same_topic_terms[:3]
+                    original_item = None
+                    for raw in self.topics_by_format.get('quiz', {}).get(q_topic, []):
+                        raw_term = raw.get("term", "") or raw.get("name", "")
+                        raw_def = raw.get("definition") or raw.get("def") or ""
+                        if str(raw_term) == str(term) and (not raw_def or str(raw_def) == str(definition)):
+                            original_item = raw
+                            break
 
-                    if len(wrong_choices) < 3 and same_topic_terms:
-                        i = 0
+                    if original_item and isinstance(original_item.get("choices"), list) and len(original_item.get("choices")) > 0:
+                        # take up to 4 raw choices and detect which one is correct
+                        raw_choices = [str(x) for x in original_item.get("choices")][:4]
+                        try:
+                            correct_idx = int(original_item.get("correct")) if original_item.get("correct") is not None else None
+                        except Exception:
+                            correct_idx = None
+
+                        # pad to length 4
+                        while len(raw_choices) < 4:
+                            raw_choices.append("")
+
+                        # ensure correct_idx is valid for truncated list
+                        if len(raw_choices) > 4:
+                            raw_choices = raw_choices[:4]
+                            if correct_idx is not None and correct_idx >= len(raw_choices):
+                                correct_idx = None
+
+                        # build (choice, is_correct) pairs and shuffle them
+                        pairs = []
+                        for i, ch in enumerate(raw_choices):
+                            is_correct = (i == correct_idx)
+                            pairs.append([ch, is_correct])
+
+                        random.shuffle(pairs)
+
+                        # extract shuffled choices and find new correct index
+                        choices = [str(p[0]) for p in pairs]
+                        new_correct = None
+                        for i, p in enumerate(pairs):
+                            if p[1]:
+                                new_correct = i
+                                break
+                        correct_idx = new_correct if new_correct is not None else None
+                    else:
+                        same_topic_items = self.topics_by_format.get('quiz', {}).get(q_topic, [])
+                        same_topic_terms = [it.get("term") or it.get("name") for it in same_topic_items if (it.get("term") or it.get("name")) and (it.get("term") or it.get("name")) != term]
+                        random.shuffle(same_topic_terms)
+                        wrong_choices = []
+                        idx = 0
                         while len(wrong_choices) < 3:
-                            wrong_choices.append(same_topic_terms[i % len(same_topic_terms)])
-                            i += 1
-
-                    while len(wrong_choices) < 3:
-                        wrong_choices.append("—")
-
-                    choices = wrong_choices[:3] + [term]
-                    random.shuffle(choices)
+                            if idx < len(same_topic_terms):
+                                candidate = same_topic_terms[idx]; idx += 1
+                                if candidate and candidate not in wrong_choices:
+                                    wrong_choices.append(candidate)
+                            else:
+                                wrong_choices.append("")
+                        choices = wrong_choices[:3] + [term]
+                        random.shuffle(choices)
+                        try:
+                            correct_idx = choices.index(term)
+                        except Exception:
+                            correct_idx = 3
 
                     self.current_choices = choices
-                    self.current_correct = choices.index(term)
+                    self.current_correct = correct_idx
                     self.answers = {}
                     qidx = self.current_qidx
 
                 payload = {
                     "type": "new_question",
+                    "format": "quiz",
                     "question_idx": qidx,
                     "choices": self.current_choices,
-                    "turn_time": TURN_TIME,
+                    "turn_time": turn_time,
                     "server_ts": time.time(),
-                    "question_topic": self._q_topics.get(qidx, self.current_topic)
+                    "question_topic": q_topic
                 }
-                # Send both original image and thumbnail path as fallback
-                if isinstance(definition, str) and definition.startswith("/static/"):
-                    basename = os.path.basename(definition)
-                    payload["image"] = definition
-                    payload["image_thumb"] = f"/thumbs/420x0/{basename}"
+
+                # original behavior restored: send image and image_thumb (client handles missing thumb)
+                image_path = None
+                if _is_image_path(term):
+                    image_path = term
+                elif _is_image_path(definition):
+                    image_path = definition
+
+                if image_path:
+                    payload["image"] = image_path
+                    payload["image_thumb"] = f"/static/quiz/thumbs/{THUMB_SIZE}/{os.path.basename(image_path)}"
+                    if _is_image_path(term):
+                        payload["question_text"] = definition if definition else ""
+                    else:
+                        payload["question_text"] = term if term else ""
+                    payload["term"] = ""
                 else:
                     payload["term"] = term
-                    payload["definition"] = definition
+                    if definition:
+                        payload["definition"] = definition
+                    payload["question_text"] = term if term else (definition if definition else "")
+
+                # ensure thumb folder for THUMB_SIZE exists (prepare once)
+                try:
+                    os.makedirs(os.path.join(QUIZ_THUMBS_DIR, THUMB_SIZE), exist_ok=True)
+                except Exception:
+                    log.debug("could not create thumb dir for size %s", THUMB_SIZE, exc_info=True)
 
                 self.current_question_start_ts = time.time()
+                log.debug("Broadcasting question %d/%d topic=%s term=%s", qidx + 1, total, q_topic, (term[:80] if term else ""))
                 await self.broadcast(payload)
 
-                for sec in range(TURN_TIME, 0, -1):
-                    await self.broadcast({"type": "tick", "remaining": sec, "turn_time": TURN_TIME})
+                for sec in range(turn_time, 0, -1):
+                    await self.broadcast({"type": "tick", "remaining": sec, "turn_time": turn_time})
                     await asyncio.sleep(1)
 
                 results = []
-                question_start = self.current_question_start_ts or (time.time() - TURN_TIME)
+                question_start = self.current_question_start_ts or (time.time() - turn_time)
                 async with self.lock:
-                    for pname, p in list(self.players.items()):
-                        ans = self.answers.get(pname)
-                        if ans:
-                            choice_idx, ans_ts = int(ans[0]), float(ans[1])
-                            ok = (choice_idx == self.current_correct)
-                        else:
-                            choice_idx, ans_ts = None, None
-                            ok = False
+                    players_snapshot = list(self.players.items())
+                    answers_snapshot = dict(self.answers)
+                    correct_index_snapshot = int(self.current_correct) if self.current_correct is not None else None
 
-                        points_earned = 0
-                        if ok:
-                            p.score += 1
-                            p.streak += 1
-                            multiplier = min(MAX_STREAK_MULT, p.streak)
-                            elapsed = max(0.0, ans_ts - question_start)
-                            remaining = max(0.0, TURN_TIME - elapsed)
-                            speed_bonus = int((remaining / TURN_TIME) * MAX_SPEED_BONUS)
-                            points_earned = int((BASE_POINTS + speed_bonus) * multiplier)
-                            p.points += points_earned
-                        else:
-                            p.streak = 0
+                for pname, p in players_snapshot:
+                    ans = answers_snapshot.get(pname)
+                    if ans:
+                        choice_idx, ans_ts = int(ans[0]), float(ans[1])
+                        ok = (choice_idx == correct_index_snapshot)
+                    else:
+                        choice_idx, ans_ts = None, None
+                        ok = False
+                    points_earned = 0
+                    if ok:
+                        p.score += 1
+                        p.streak += 1
+                        multiplier = min(MAX_STREAK_MULT, p.streak)
+                        elapsed = max(0.0, ans_ts - question_start)
+                        remaining = max(0.0, turn_time - elapsed)
+                        speed_bonus = int((remaining / turn_time) * MAX_SPEED_BONUS)
+                        points_earned = int((BASE_POINTS + speed_bonus) * multiplier)
+                        p.points += points_earned
+                    else:
+                        p.streak = 0
 
-                        results.append({
-                            "name": pname,
-                            "choice": choice_idx,
-                            "correct": ok,
-                            "correct_count": p.score,
-                            "points_earned": points_earned,
-                            "points": p.points,
-                            "streak": p.streak
-                        })
+                    results.append({
+                        "name": pname,
+                        "choice": choice_idx,
+                        "correct": ok,
+                        "correct_count": p.score,
+                        "points_earned": points_earned,
+                        "points": p.points,
+                        "streak": p.streak
+                    })
 
-                leader_by_points = sorted(
-                    [{"name": pname, "points": p.points, "correct": p.score} for pname, p in self.players.items()],
-                    key=lambda x: -x["points"]
-                )
+                async with self.lock:
+                    leader_by_points = sorted(
+                        [{"name": pname, "points": p.points, "correct": p.score} for pname, p in self.players.items()],
+                        key=lambda x: -x["points"]
+                    )
 
                 await self.broadcast({
                     "type": "turn_result",
+                    "format": "quiz",
                     "question_idx": qidx,
-                    "correct_index": self.current_correct,
+                    "correct_index": correct_index_snapshot,
                     "results": results,
                     "leaderboard": leader_by_points
                 })
 
-                self.current_qidx += 1
+                async with self.lock:
+                    self.current_qidx += 1
+                    self.current_choices = None
+                    self.current_correct = None
+                    self.answers = {}
+                    self.current_question_start_ts = None
+
                 await asyncio.sleep(ROUND_DELAY)
+        except asyncio.CancelledError:
+            log.info("_run_quiz cancelled")
+            raise
+        except Exception:
+            log.exception("Unexpected error in _run_quiz")
         finally:
             async with self.lock:
                 final_lb = sorted(
@@ -546,85 +909,35 @@ class QuizServer:
                 self.current_question_start_ts = None
 
             try:
-                await update_ratings_after_game(self.current_topic, final_lb)
+                ctx = getattr(self, "_last_game_context", None)
+                if ctx and isinstance(ctx, dict):
+                    fmt = ctx.get("format", "quiz")
+                    topics = ctx.get("topics", [self.current_topic])
+                    for t in topics:
+                        await update_ratings_after_game(fmt, t, final_lb)
+                else:
+                    await update_ratings_after_game('quiz', self.current_topic, final_lb)
             except Exception:
                 log.exception("Failed to update ratings after game")
 
-            await self.broadcast({"type": "game_over", "leaderboard": final_lb})
-            await self.broadcast_lobby()
-
-    async def _run_study(self, method: str, topics: List[str]):
-        # Simple per-player flashcards-based study implementation
-        async with self.lock:
-            for name, p in self.players.items():
-                p.study_queue.clear()
-                p.study_stats = {"seen": 0, "correct": 0}
-                cards = []
-                for t in topics:
-                    for term, definition in self.topics_map.get(t, []):
-                        cards.append({"id": f"{t}|{term}|{uuid.uuid4().hex}", "term": term, "definition": definition, "topic": t})
-                random.shuffle(cards)
-                for c in cards:
-                    p.study_queue.append(c)
-
-        await self.broadcast({"type": "study_started", "method": method, "topics": topics})
-        try:
-            while True:
-                async with self.lock:
-                    if not self.players:
-                        self.game_running = False
-                        break
-                    if all(len(p.study_queue) == 0 for p in self.players.values()):
-                        break
-                    for name, p in list(self.players.items()):
-                        if not p.study_queue:
-                            continue
-                        card = p.study_queue[0]
-                        try:
-                            await p.ws.send_str(json.dumps({
-                                "type": "study_card",
-                                "card_id": card["id"],
-                                "term": card["term"],
-                                "definition": card["definition"],
-                                "mode": method
-                            }))
-                        except Exception:
-                            log.debug("Failed to send study_card to %s", name)
-                await asyncio.sleep(0.2)
-        finally:
-            async with self.lock:
-                summaries = []
-                for name, p in self.players.items():
-                    summaries.append({"name": name, "seen": p.study_stats.get("seen", 0), "correct": p.study_stats.get("correct", 0)})
-                self.game_running = False
-                self._game_task = None
-            await self.broadcast({"type": "study_summary", "stats": summaries})
+            await self.broadcast({"type": "game_over", "format": "quiz", "leaderboard": final_lb})
             await self.broadcast_lobby()
 
 # ---------------------------
-# Client HTML: embedded fallback (minimal)
+# HTTP + WebSocket handlers
 # ---------------------------
-def create_embedded_client_html() -> str:
-    # Minimal fallback: instructs to place client.html in repo; includes tiny basic UI.
-    return """<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Quiz client (fallback)</title></head>
-<body>
-<h2>Client not found on disk</h2>
-<p>Place client.html next to run_server.py or in ./static/client.html to use the full UI.</p>
-</body></html>
-"""
-
-# ---------------------------
-# HTTP + WebSocket handlers (complete web part)
-# ---------------------------
-quiz: Optional[QuizServer] = None
+quiz_server: Optional[QuizServer] = None
 
 def get_index_path() -> Optional[str]:
-    # prefer STATIC_DIR/client.html then BASE_DIR/client.html
-    candidates = [os.path.join(STATIC_DIR, DEFAULT_INDEX), os.path.join(BASE_DIR, DEFAULT_INDEX)]
+    candidates = [
+        os.path.join(STATIC_DIR, DEFAULT_INDEX),
+        os.path.join(BASE_DIR, DEFAULT_INDEX),
+        os.path.join(STATIC_DIR, "game_client.html"),
+        os.path.join(BASE_DIR, "game_client.html"),
+    ]
     for p in candidates:
         if os.path.isfile(p):
-            log.info("Serving client.html from %s", os.path.abspath(p))
+            log.info("Serving %s from %s", os.path.basename(p), os.path.abspath(p))
             return p
     return None
 
@@ -635,14 +948,13 @@ async def index_handler(request):
         resp.headers['Cache-Control'] = 'no-store'
         return resp
     else:
-        return web.Response(text=create_embedded_client_html(), content_type="text/html")
+        return web.Response(text="<h1>Client not found</h1>", content_type="text/html")
 
 async def static_handler(request):
     rel = request.match_info.get('path', '') or request.match_info.get('name', '')
     if '..' in rel or rel.startswith('/'):
         raise web.HTTPNotFound()
-    # use pathlib to avoid traversal
-    candidates_dirs = [STATIC_DIR, BASE_DIR, os.path.join(STATIC_DIR, "uploads"), os.path.join(BASE_DIR, "uploads")]
+    candidates_dirs = [STATIC_DIR, BASE_DIR, QUIZ_UPLOADS_DIR, os.path.join(BASE_DIR, "uploads")]
     for base in candidates_dirs:
         try:
             base_p = pathlib.Path(base).resolve()
@@ -655,13 +967,7 @@ async def static_handler(request):
             continue
     raise web.HTTPNotFound()
 
-# Thumbnail handler with EXIF orientation fix
 async def thumb_handler(request):
-    """
-    GET /thumbs/{size}/{name}
-    size: WIDTHxHEIGHT e.g. 420x0 (0 = preserve aspect)
-    name: basename of file under static/uploads or uploads
-    """
     size = request.match_info.get('size', '')
     name = request.match_info.get('name', '')
     if '..' in name or name.startswith('/'):
@@ -674,21 +980,30 @@ async def thumb_handler(request):
         h = int(h_s) if h_s.isdigit() else 0
         if w <= 0 and h <= 0:
             raise ValueError()
+        if w > MAX_THUMB_DIM or h > MAX_THUMB_DIM:
+            raise web.HTTPBadRequest(text="Requested thumbnail too large")
     except Exception:
         raise web.HTTPBadRequest(text="Bad size")
 
-    # prefer ./static/uploads, fallback to ./uploads
-    src_path = os.path.join(STATIC_DIR, "uploads", name)
+    src_path = os.path.join(QUIZ_UPLOADS_DIR, name)
     if not os.path.isfile(src_path):
-        src_path = os.path.join(BASE_DIR, "uploads", name)
+        src_path = os.path.join(STATIC_DIR, "uploads", name)
         if not os.path.isfile(src_path):
-            raise web.HTTPNotFound()
+            src_path = os.path.join(BASE_DIR, "uploads", name)
+            if not os.path.isfile(src_path):
+                raise web.HTTPNotFound()
 
-    target_dir = os.path.join(THUMBS_DIR, f"{w}x{h}")
+    try:
+        size_bytes = os.path.getsize(src_path)
+    except Exception:
+        raise web.HTTPNotFound()
+    if size_bytes > MAX_UPLOAD_BYTES:
+        raise web.HTTPRequestEntityTooLarge()
+
+    target_dir = os.path.join(QUIZ_THUMBS_DIR, f"{size}")
     os.makedirs(target_dir, exist_ok=True)
     target_path = os.path.join(target_dir, name)
 
-    # Logging for diagnostics (inserted per patch)
     log.info("thumb request: size=%s name=%s src_path=%s", size, name, src_path)
 
     if os.path.isfile(target_path):
@@ -696,25 +1011,36 @@ async def thumb_handler(request):
 
     try:
         with Image.open(src_path) as im:
-            # apply EXIF-based transpose so orientation matches camera/viewer expectation
             try:
                 im = ImageOps.exif_transpose(im)
             except Exception:
                 pass
 
-            # convert transparency to white background for JPEG
+            try:
+                im.seek(0)
+            except Exception:
+                pass
+
             if im.mode in ("RGBA", "LA"):
                 bg = Image.new("RGB", im.size, (255,255,255))
-                bg.paste(im, mask=im.split()[-1])
+                try:
+                    bg.paste(im, mask=im.split()[-1])
+                except Exception:
+                    bg.paste(im)
                 im = bg
+            else:
+                im = im.convert("RGB")
 
             orig_w, orig_h = im.size
+            if orig_w <= 0 or orig_h <= 0 or orig_w * orig_h > MAX_PIXELS:
+                raise web.HTTPBadRequest(text="Image too large")
+
             if w == 0:
                 ratio = h / orig_h
-                w = max(1, int(orig_w * ratio))
+                w = max(1, min(MAX_THUMB_DIM, int(orig_w * ratio)))
             elif h == 0:
                 ratio = w / orig_w
-                h = max(1, int(orig_h * ratio))
+                h = max(1, min(MAX_THUMB_DIM, int(orig_h * ratio)))
 
             im.thumbnail((w, h), Image.LANCZOS)
 
@@ -727,56 +1053,76 @@ async def thumb_handler(request):
             else:
                 im.save(tmp)
             os.replace(tmp, target_path)
+    except FileNotFoundError:
+        raise web.HTTPNotFound()
+    except web.HTTPException:
+        raise
     except Exception:
         log.exception("Thumb creation failed for %s -> %s (size=%s)", src_path, target_path, size)
         raise web.HTTPInternalServerError()
 
     return web.FileResponse(target_path)
 
-# Reload topics endpoint
+async def thumb_plain_quiz_handler(request):
+    name = request.match_info.get('name', '')
+    if '..' in name or name.startswith('/'):
+        raise web.HTTPNotFound()
+    return web.HTTPFound(f"/static/quiz/thumbs/{THUMB_SIZE}/{name}")
+
 async def reload_topics_handler(request):
-    global quiz
+    global quiz_server
     try:
         newmap = load_topics_from_dir()
-        if not newmap:
+        if not newmap or not newmap.get("quiz"):
             return web.json_response({"ok": False, "error": "no topics found after reload"}, status=400)
-        if quiz:
-            async with quiz.lock:
-                quiz.topics_map = newmap
-                quiz.available_topics = list(newmap.keys())
-                if quiz.current_topic not in quiz.available_topics and quiz.available_topics:
-                    quiz.current_topic = quiz.available_topics[0]
-                quiz.questions = quiz._prepare_questions([quiz.current_topic])
-                quiz.current_qidx = 0
-        return web.json_response({"ok": True, "topics": list(newmap.keys())})
+
+        compact = {}
+        for fmt, topics in newmap.items():
+            try:
+                compact[fmt] = list(topics.keys())
+            except Exception:
+                compact[fmt] = []
+
+        if quiz_server:
+            async with quiz_server.lock:
+                quiz_server.topics_by_format = newmap
+                quiz_server.available_formats = list(newmap.keys())
+                if quiz_server.current_format not in quiz_server.available_formats:
+                    quiz_server.current_format = quiz_server.available_formats[0] if quiz_server.available_formats else "quiz"
+                quiz_server.available_topics = list(newmap.get(quiz_server.current_format, {}).keys())
+                if not quiz_server.current_topic and quiz_server.available_topics:
+                    quiz_server.current_topic = quiz_server.available_topics[0]
+                quiz_server.questions = quiz_server._prepare_questions([quiz_server.current_topic], quiz_server.current_format) if quiz_server.current_topic else []
+                quiz_server.current_qidx = 0
+
+        try:
+            if quiz_server:
+                await quiz_server.broadcast_lobby()
+        except Exception:
+            log.exception("broadcast_lobby failed after reload")
+
+        return web.json_response({"ok": True, "formats": list(newmap.keys()), "topics_by_format": compact})
     except Exception as e:
         log.exception("reload topics failed")
         return web.json_response({"ok": False, "error": str(e)}, status=500)
-# Health endpoint
+
+async def get_ratings_api_handler(request):
+    fmt = request.query.get("format", "")
+    topic = request.query.get("topic", "")
+    if not fmt or not topic:
+        return web.json_response({"ok": False, "error": "format and topic required"}, status=400)
+    try:
+        lst = await get_ratings_for_format_topic(fmt, topic, top_n=200)
+        return web.json_response({"ok": True, "format": fmt, "topic": topic, "ratings": lst})
+    except Exception:
+        log.exception("get_ratings_api_handler failed")
+        return web.json_response({"ok": False, "error": "internal"}, status=500)
+
 async def ping(request):
     return web.Response(text="ok")
 
-def create_app(topics_map: Dict[str, List[Tuple[str, str]]]):
-    app = web.Application()
-    app.router.add_get('/', index_handler)
-    app.router.add_get('/' + DEFAULT_INDEX, index_handler)
-    app.router.add_get(DEFAULT_WS_PATH, ws_handler)
-    app.router.add_get('/{path:.*\\.(js|css|png|jpg|jpeg|svg|ico)}', static_handler)
-    app.router.add_get('/static/uploads/{name}', static_handler)
-    app.router.add_get('/thumbs/{size}/{name}', thumb_handler)
-    app.router.add_post('/api/reload-topics', reload_topics_handler)
-    app.router.add_get('/ping', ping)
-    return app
-
-def parse_args():
-    p = argparse.ArgumentParser(description="Quiz server")
-    p.add_argument("--host", default="0.0.0.0")
-    p.add_argument("--http-port", default=8000, type=int)
-    return p.parse_args()
-
-# WebSocket handler defined after QuizServer to avoid forward reference issues
 async def ws_handler(request):
-    global quiz
+    global quiz_server
     ws = web.WebSocketResponse()
     await ws.prepare(request)
 
@@ -784,6 +1130,9 @@ async def ws_handler(request):
     try:
         join_msg = await ws.receive()
         if join_msg.type != WSMsgType.TEXT:
+            await ws.close()
+            return ws
+        if not isinstance(join_msg.data, str) or len(join_msg.data) > 64 * 1024:
             await ws.close()
             return ws
         try:
@@ -794,42 +1143,83 @@ async def ws_handler(request):
         if j.get("type") != "join" or not j.get("name"):
             await ws.close()
             return ws
-        # simple sanitation
-        raw_name = str(j.get("name")).strip()[:48]
-        name = await quiz.add_player(raw_name, ws)
+        raw_name = str(j.get("name") or "").strip()[:48]
+        name = await quiz_server.add_player(raw_name, ws)
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
                 try:
+                    if isinstance(msg.data, str) and len(msg.data) > 256 * 1024:
+                        continue
                     data = json.loads(msg.data)
                 except Exception:
                     continue
-                await quiz.handle_message(name, data)
+                await quiz_server.handle_message(name, data)
             elif msg.type == WSMsgType.ERROR:
                 log.warning("ws connection closed with exception %s", ws.exception())
                 break
-    except Exception as e:
-        log.exception("ws handler exception: %s", e)
+    except Exception:
+        log.exception("ws handler exception")
     finally:
         if name:
-            await quiz.remove_player(name)
+            try:
+                await quiz_server.remove_player(name)
+            except Exception:
+                log.exception("remove_player failed in ws_handler")
         try:
             await ws.close()
         except Exception:
             pass
     return ws
 
+def create_app(topics_map: Dict[str, Dict[str, List[dict]]]):
+    global quiz_server
+    quiz_server = QuizServer(topics_map)
+    app = web.Application()
+    app.router.add_get('/', index_handler)
+    app.router.add_get('/' + DEFAULT_INDEX, index_handler)
+    app.router.add_get('/game_client.html', index_handler)
+    app.router.add_get(DEFAULT_WS_PATH, ws_handler)
+    app.router.add_get('/static/{path:.*}', static_handler)
+    app.router.add_get('/uploads/{name}', static_handler)
+    app.router.add_get('/thumbs/{size}/{name}', thumb_handler)
+    app.router.add_get('/static/quiz/thumbs/{size}/{name}', thumb_handler)
+    app.router.add_get('/static/quiz/thumbs/{name}', thumb_plain_quiz_handler)
+    app.router.add_post('/api/reload-topics', reload_topics_handler)
+    app.router.add_get('/api/get-ratings', get_ratings_api_handler)
+    app.router.add_get('/ping', ping)
+
+    async def on_shutdown(app):
+        global quiz_server
+        if quiz_server and getattr(quiz_server, "_game_task", None):
+            try:
+                quiz_server._game_task.cancel()
+                await asyncio.wait_for(quiz_server._game_task, timeout=3.0)
+            except Exception:
+                pass
+
+    app.on_shutdown.append(on_shutdown)
+    return app
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Quiz server")
+    p.add_argument("--host", default="0.0.0.0")
+    p.add_argument("--http-port", default=8000, type=int)
+    return p.parse_args()
+
 if __name__ == "__main__":
-    _ensure_ratings_file()
+    try:
+        _ensure_ratings_file()
+    except Exception:
+        log.error("Cannot create or access ratings file %s; aborting", RATINGS_FILE)
+        sys.exit(1)
     _ensure_topics_dir()
     loaded = load_topics_from_dir()
-    if not loaded:
-        log.error("No valid topic files found in %s. Please add JSON files (UTF-8) with questions; exiting.", TOPICS_DIR)
+    if not loaded or not loaded.get("quiz"):
+        log.error("No valid topic files found in %s. Please add JSON files (UTF-8) into topics/quiz with questions; exiting.", QUIZ_SUBDIR)
         sys.exit(1)
-    log.info("Using %d topic(s) loaded from %s", len(loaded), TOPICS_DIR)
-
+    log.info("Using formats: %s", ", ".join(sorted(loaded.keys())))
     args = parse_args()
     try:
-        quiz = QuizServer(loaded)
         app = create_app(loaded)
         log.info("Starting HTTP+WS server on %s:%d ws=%s", args.host, args.http_port, DEFAULT_WS_PATH)
         web.run_app(app, host=args.host, port=args.http_port)
