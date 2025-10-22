@@ -1,609 +1,751 @@
 <!doctype html>
-<html>
+<html lang="ru">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Quiz client</title>
 <style>
 :root{
-  --bg:#0b0b0b; --card:#161616; --accent:#0066ff;
-  --ok:#00c853; --bad:#ff1744; --muted:#bdbdbd; --glass: rgba(255,255,255,0.03);
-  --gutter:12px;
-  --control-height:44px;
+  --bg: #07121a;
+  --card: #0f1720;
+  --glass: rgba(255,255,255,0.03);
+  --muted: #bdbdbd;
+  --accent: #1e90ff;
+  --ok: #00c853;
+  --bad: #ff3860;
+  --gutter: 14px;
+  --control-height:48px;
+  --side-w:160px;
+  --choice-radius:12px;
+  --choice-shadow: 0 8px 24px rgba(0,0,0,0.55);
+  --btn-shadow: 0 6px 18px rgba(0,0,0,0.45);
+  --btn-bg: var(--accent);
+  --btn-color: #ffffff;
 }
 *{box-sizing:border-box}
-html, body { overscroll-behavior: none; touch-action: manipulation; height:100%; }
-body{margin:0;font-family:system-ui,Segoe UI,Roboto,Arial;background:var(--bg);color:#fff;min-height:100vh}
-.container{max-width:1100px;margin:12px auto;padding:16px;display:flex;flex-direction:column;gap:16px;transition:padding-top .25s}
+html,body{height:100%;margin:0;font-family:Inter, system-ui, Roboto, Arial;background:var(--bg);color:#fff;-webkit-font-smoothing:antialiased}
 
-/* collapsed menu padding helper */
-.container.menu-collapsed { padding-top: 8px; }
-
-/* top grid: left (controls) + right (buttons) */
-.top-grid{
-  display:grid;
-  grid-template-columns: 1fr 200px;
-  gap:var(--gutter);
-  align-items:center;
-  width:100%;
-  transition:transform .25s, opacity .2s;
+/* --- Disable native pull-to-refresh and overscroll gestures generally --- */
+html, body {
+  overscroll-behavior-y: none;
+  -webkit-overflow-scrolling: auto;
+  touch-action: pan-y;
+}
+.container, .card, .image-wrap, #mainContainer {
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: auto;
 }
 
-/* left/right stacks */
-.left-stack{display:flex;flex-direction:column;gap:var(--gutter)}
-.right-stack{display:flex;flex-direction:column;gap:var(--gutter);align-items:stretch;justify-content:center}
-
-/* studyMethodRow: visible when needed; reduced gap to topic */
-#studyMethodRow {
-  display: none;
-  width: 100%;
-  margin-top: calc(var(--gutter) / 2); /* reduced gap between Topic and Method */
-}
-/* helper class used when studyMethodRow is inserted after top-grid */
-.top-wide { grid-column: 1 / -1; }
-
-/* fields — uniform height */
+/* --- Layout and UI --- */
+.container{max-width:1100px;margin:14px auto;padding:18px;display:flex;flex-direction:column;gap:18px}
+.top-grid{display:grid;grid-template-columns:1fr var(--side-w);gap:var(--gutter);align-items:start}
+.field{display:flex;flex-direction:column;gap:var(--gutter)}
 .field input, .field select{
-  height: var(--control-height);
-  line-height: normal;
-  width:100%;padding:0 12px;border-radius:10px;border:0;background:var(--glass);color:#fff;font-size:15px;
-  display:flex;align-items:center;
-  -webkit-appearance: none;
-  -moz-appearance: none;
-  appearance: none;
+  height:var(--control-height);
+  width:100%;
+  padding:0 14px;
+  border-radius:10px;
+  border:1px solid rgba(255,255,255,0.04);
+  background:var(--glass);
+  color:#fff;
+  font-size:15px;
+  outline:none;
+  transition:box-shadow .14s, transform .08s, border-color .08s;
 }
-.field input::placeholder{ color: rgba(255,255,255,0.6); }
+.field input::placeholder{ color: rgba(255,255,255,0.55) }
+.field input:focus, .field select:focus{ box-shadow:0 6px 18px rgba(30,144,255,0.08); border-color: rgba(30,144,255,0.14) }
 
-/* select placeholder styling */
-.field select { color: #fff; }
-.field select:invalid { color: rgba(255,255,255,0.6); }
-.field select option[disabled] { color: rgba(255,255,255,0.6); }
-
-/* buttons */
 .btn{
-  height: var(--control-height);
-  border-radius:10px;border:0;font-size:15px;cursor:pointer;padding:0 14px;
-  display:inline-flex;align-items:center;justify-content:center;
+  height:var(--control-height);
+  border-radius:10px;
+  border:0;
+  font-size:15px;
+  cursor:pointer;
+  padding:0 14px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:100%;
+  transition:transform .08s, box-shadow .12s, opacity .12s;
+  box-shadow: var(--btn-shadow);
+  background: var(--btn-bg);
+  color: var(--btn-color);
 }
-.btn.full{width:100%}
-#join{background:var(--accent);color:#fff}
-#start{background:#22c55e;color:#fff}
-#rating{background:#ffb300;color:#111}
+.btn:active{ transform:translateY(2px) }
+.btn:disabled{ opacity:0.55; cursor:default; transform:none; box-shadow:none }
 
-/* Card / question area */
+#join{ --btn-bg: #1e90ff; --btn-color:#fff; font-weight:700 }
+#rating{ --btn-bg: #ffd54f; --btn-color:#111; font-weight:700 }
+#start{ --btn-bg: #10b981; --btn-color:#042010; font-weight:800 }
+
 .card{
-  padding:18px;background:var(--card);border-radius:12px;margin-top:8px;display:flex;flex-direction:column;gap:12px;
-  transition:height .2s;
+  padding:16px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.006));
+  border-radius:12px;
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+  border:1px solid rgba(255,255,255,0.03);
+  box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+}
+.qtext{ font-size:20px; text-align:center; margin:6px 0; font-weight:700 }
+.meta{ font-size:13px; color:var(--muted); text-align:center }
+
+.image-wrap{ display:flex; flex-direction:column; align-items:center; gap:8px; overflow:hidden }
+.image-wrap img{ max-width:100%; max-height:48vh; border-radius:8px; object-fit:contain }
+
+.progress{ height:10px; background:rgba(255,255,255,0.03); border-radius:8px; overflow:hidden; margin:10px auto; width:100% }
+.progress>i{ display:block; height:100%; background:linear-gradient(90deg,#ffd54f,#ff6b6b); width:0%; transition:width .18s linear }
+
+/* ====== CHOICES: allow multiline, prevent one-letter orphans ====== */
+.choices{
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap:12px;
+  margin:0;
+  width:100%;
+  justify-items:stretch;
+  align-items:stretch;
+  box-sizing:border-box;
 }
 
-.qtext{font-size:20px;text-align:center;margin:6px 0}
-.meta{font-size:13px;color:var(--muted);text-align:center}
-.image-wrap{text-align:center;display:flex;align-items:flex-start;justify-content:center;overflow:hidden}
-.image-wrap img{
-  display:block;
-  max-width:100%;
-  width:auto;
-  height:auto;
-  max-height:80vh;
-  margin: 0 auto;
-  border-radius:8px;
-  object-fit:contain;
+/* increased font size by ~2px compared to previous baseline */
+.choice{
+  padding: clamp(10px, 2vw, 14px);
+  border-radius:var(--choice-radius);
+  font-weight:800;
+  color:#042010;
+  background:#e6eefb;
+  min-height:64px;
+  text-align:center;
+  cursor:pointer;
+  user-select:none;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  transition:transform .12s, box-shadow .12s;
+  box-shadow: var(--choice-shadow);
+  white-space: normal;           /* allow wrapping */
+  overflow-wrap: break-word;     /* break long words if needed */
+  word-break: normal;
+  hyphens: auto;
+  font-size: clamp(15px, 2.2vw, 18px); /* increased by ~2px */
+  line-height:1.15;
+}
+.choice:hover{ transform:translateY(-4px); box-shadow:0 14px 36px rgba(0,0,0,0.45) }
+.choice.disabled{ opacity:0.6; pointer-events:none }
+.choice.pressed{ transform:translateY(3px); box-shadow:0 6px 18px rgba(0,0,0,0.3) }
+.choice.correct{ border:4px solid var(--ok); background:#e7ffef }
+.choice.wrong{ border:4px solid var(--bad); background:#ffe6ec }
+.choice .choice-label{ display:block; padding:6px 8px; color: #042010; font-weight:800; font-size:17px; } /* increased label font by ~2px */
+
+.choice img.choice-img{ max-width:100%; max-height:120px; object-fit:contain; border-radius:8px; display:block }
+
+.lobby-header{ display:flex; align-items:center; justify-content:space-between; gap:12px }
+.start-wrapper{ min-width:140px }
+.players-list{ font-size:13px; color:var(--muted); margin-top:6px }
+
+/* Modal (results) styling revised: make modal-card scrollable and limited height */
+.modal{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.6); z-index:60 }
+.modal.show{ display:flex }
+
+/* modal-card: limit height, use column layout so inner content can scroll */
+.modal-card{
+  width:min(920px,calc(100% - 40px));
+  max-height: calc(100vh - 80px);
+  background:#081019;
+  border-radius:12px;
+  padding:18px;
+  color:#fff;
+  box-shadow:0 20px 60px rgba(0,0,0,0.6);
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+  overflow:hidden;
+}
+.modal-close{ background:transparent; border:0; color:var(--muted); cursor:pointer; font-size:16px; padding:6px 10px; border-radius:8px }
+
+/* container that wraps the table: flex-grow and allow internal scroll */
+.modal-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-right:6px;
 }
 
-/* progress and choices */
-.progress{height:12px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden;margin:8px auto 12px auto;width:100%}
-.progress>i{display:block;height:100%;background:linear-gradient(90deg,#ef5350,#29b6f6);width:0%;transition:width 300ms linear}
-.choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:0 auto;width:100%;max-width:920px}
-.choice{padding:14px;border-radius:12px;font-weight:800;color:#fff;text-align:center;cursor:pointer;user-select:none;outline:none;box-shadow:0 6px 18px rgba(0,0,0,0.6)}
-.choice.disabled{opacity:0.7;pointer-events:none}.choice.pressed{transform:translateY(3px)}
-.choice.correct{border:4px solid var(--ok)}.choice.wrong{border:4px solid var(--bad)}
-.a{background:#ef5350}.b{background:#ffd54f;color:#111}.c{background:#66bb6a}.d{background:#29b6f6;color:#111}
+/* ensure table is constrained and won't cause modal overflow */
+#resultsTable {
+  width:100%;
+  border-collapse:collapse;
+  text-align:left;
+  font-size:14px;
+  table-layout: fixed;
+  max-width: 100%;
+}
 
-/* modals */
-.modal{position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:9999}
-.box{background:#101010;padding:18px;border-radius:12px;max-width:760px;width:95%}
-.results-table{width:100%;border-collapse:collapse}
-.results-table th,.results-table td{padding:10px;border-bottom:1px solid rgba(255,255,255,0.03);text-align:left}
-.result-1{background:linear-gradient(90deg,rgba(255,215,0,0.08),transparent)}
+/* headers: slightly smaller */
+#resultsTable thead th {
+  padding:8px 10px;
+  color:var(--muted);
+  font-weight:700;
+  text-transform:uppercase;
+  vertical-align:middle;
+  font-size:12px;
+  border-bottom:1px solid rgba(255,255,255,0.06);
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
 
-.flash-controls{display:flex;gap:8px;justify-content:center}
-.flash-controls button{height:40px;border-radius:8px;padding:0 10px}
+/* column sizing tuned so "Игрок" gets smaller (fits ~5 letters now) */
+#resultsTable thead th:nth-child(1) { width:56px; min-width:56px; max-width:72px; text-align:center; }
+#resultsTable thead th:nth-child(3) { width:66px; min-width:56px; max-width:86px; text-align:center; }
+#resultsTable thead th:nth-child(4) { width:96px; min-width:80px; max-width:120px; text-align:center; }
 
-/* Responsive tweaks */
+/* name column: reduced to fit ~5 letters (ch units approximate character width) */
+#resultsTable thead th:nth-child(2) { width: calc(100% - 56px - 66px - 96px); min-width: calc(5ch + 6ch); text-align:left; }
+
+/* body rows and cells */
+#resultsTable tbody tr { border-bottom:1px solid rgba(255,255,255,0.03); }
+#resultsTable tbody td {
+  padding:10px 12px;
+  vertical-align:middle;
+  font-size:13px;
+  color: #fff;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+/* name cell: now limited to roughly 5 characters + slack */
+#resultsTable tbody td:nth-child(2) {
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  max-width: calc(5ch + 8ch); /* approx space for ~5 letters plus padding/glyph slack */
+}
+
+/* place and points center and strong */
+#resultsTable tbody td:nth-child(1),
+#resultsTable tbody td:nth-child(3),
+#resultsTable thead th:nth-child(1),
+#resultsTable thead th:nth-child(3) {
+  text-align:center;
+  font-weight:800;
+}
+
+/* last column center, keep compact */
+#resultsTable tbody td:nth-child(4),
+#resultsTable thead th:nth-child(4) {
+  text-align:center;
+  white-space:nowrap;
+  overflow:hidden;
+}
+
+/* responsive tweaks */
 @media (max-width:920px){
-  .top-grid{grid-template-columns: minmax(140px, 0.62fr) minmax(80px, 120px);gap:10px}
-  :root{--control-height:42px}
+  .modal-card{ width: calc(100% - 32px); }
+  #resultsTable { table-layout: auto; }
+  #resultsTable thead th:nth-child(2) { width: auto; min-width: calc(5ch + 4ch); }
+  #resultsTable tbody td:nth-child(2) { max-width: calc(5ch + 6ch); }
 }
 @media (max-width:720px){
-  .top-grid{grid-template-columns: minmax(120px, 1fr) minmax(70px, 100px);gap:8px;align-items:center}
-  :root{--control-height:40px}
+  #resultsTable tbody td:nth-child(2) { max-width: calc(4ch + 6ch); }
+  #resultsTable thead th:nth-child(3) { width:66px; }
+  #resultsTable thead th:nth-child(4) { width:100px; }
+}
+@media (max-width:520px){
+  #resultsTable { font-size:13px; }
+  #resultsTable thead th { font-size:11px; padding:6px 8px; }
+  #resultsTable tbody td { font-size:12px; padding:8px 8px; white-space:normal; }
+  #resultsTable tbody td:nth-child(2) { max-width:160px; white-space:normal; }
+  #resultsTable thead th:nth-child(4), #resultsTable tbody td:nth-child(4) { max-width:100px; }
+}
+
+.hidden{ display:none }
+
+@media (max-width:520px){
+  .choices{ gap:10px; }
+  .top-grid{ grid-template-columns: 1fr 120px }
+  :root{ --control-height:44px; --side-w:120px }
+  .choice{ font-size: 16px; padding: 10px; min-height:56px; }
+  .choice .choice-label{ font-size:15px; }
 }
 </style>
 </head>
 <body>
-
 <div class="container" id="mainContainer">
-  <div class="top-grid" id="topGrid">
-    <div class="left-stack">
+  <div class="top-grid">
+    <div>
       <div class="field">
-        <input id="name" placeholder="Ваше имя" aria-label="Ваше имя">
-      </div>
-
-      <div class="field">
-        <select id="format" aria-label="Выбор формата" required>
-          <option value="" disabled selected>Выбор формата</option>
-          <option value="game">Игра</option>
-          <option value="study">Обучение</option>
-        </select>
-      </div>
-
-      <div class="field">
-        <select id="topic" aria-label="Выбор темы" required>
-          <option value="" disabled selected>Выбор темы</option>
-        </select>
-      </div>
-
-      <!-- studyMethodRow stays here; will be moved temporarily after top-grid when needed -->
-      <div class="field" id="studyMethodRow">
-        <select id="studyMethod" aria-label="Метод обучения" required>
-          <option value="" disabled selected>Метод обучения</option>
-          <option value="flashcards">Flashcards</option>
-          <option value="matching">Matching</option>
-          <option value="typing">Typing</option>
-          <option value="spaced">Spaced</option>
-        </select>
+        <input id="name" placeholder="Укажите Имя" aria-label="Ваше имя" autocomplete="off" />
+        <select id="topic" aria-label="Выбор темы"><option value="" disabled selected>Выберите тему</option></select>
       </div>
     </div>
 
-    <div class="right-stack">
-      <button id="join" class="btn full">Connect</button>
-      <button id="start" class="btn full">Старт</button>
-      <button id="rating" class="btn full">Рейтинг</button>
-    </div>
-  </div>
-
-  <!-- placeholder slot for studyMethod when it should span full width -->
-  <div id="studyMethodSlot"></div>
-
-  <div class="card" id="gameCard" aria-live="polite">
-    <div class="qtext" id="qtext">Ожидание игры...</div>
-    <div class="meta" id="metaInQ">Вопросов в игре: 0</div>
-
-    <div class="image-wrap" id="imageWrap" style="display:none"></div>
-
-    <div class="progress" id="progress" style="display:none"><i id="progressBar"></i></div>
-
-    <div class="choices" id="choices" aria-hidden="true">
-      <div class="choice a" id="c0">A</div>
-      <div class="choice b" id="c1">B</div>
-      <div class="choice c" id="c2">C</div>
-      <div class="choice d" id="c3">D</div>
-    </div>
-
-    <div id="studyArea" style="display:none">
-      <div id="flashCard" style="text-align:center">
-        <div id="cardTerm" style="font-size:22px;font-weight:700;margin:12px 0"></div>
-        <div id="cardDef" style="font-size:18px;color:var(--muted);display:none"></div>
-        <div class="flash-controls">
-          <button id="showAnswer" class="btn">Показать ответ</button>
-          <button id="knowBtn" class="btn" style="background:var(--ok)">Знаю</button>
-          <button id="dontKnowBtn" class="btn" style="background:var(--bad)">Не знаю</button>
+    <div style="display:flex;flex-direction:column;gap:var(--gutter)">
+      <div>
+        <div class="field">
+          <button id="join" class="btn" type="button" disabled>Connect</button>
+          <button id="rating" class="btn" type="button" disabled>Рейтинг</button>
         </div>
       </div>
     </div>
+  </div>
 
-    <div id="playersBox" style="margin-top:12px;color:var(--muted)"></div>
+  <div class="card" id="lobbyCard">
+    <div class="lobby-header">
+      <div>
+        <strong>Присоединившиеся</strong>
+        <div id="playersBox" class="players-list">Никто не присоединился</div>
+      </div>
+      <div class="start-wrapper">
+        <button id="start" class="btn" type="button" disabled>Старт</button>
+      </div>
+    </div>
+    <div id="adminHint" style="font-size:13px;color:var(--muted)"></div>
+  </div>
+
+  <div class="card hidden" id="gameCard" aria-live="polite">
+    <div class="qtext" id="qtext"></div>
+    <div class="meta" id="metaInQ"></div>
+    <div class="image-wrap" id="imageWrap" style="display:none"></div>
+    <div class="progress" id="progress" style="display:none"><i id="progressBar"></i></div>
+
+    <div class="choices" id="choices" style="display:none" aria-hidden="true">
+      <div class="choice" id="c0" role="button" tabindex="0" data-choice=""></div>
+      <div class="choice" id="c1" role="button" tabindex="0" data-choice=""></div>
+      <div class="choice" id="c2" role="button" tabindex="0" data-choice=""></div>
+      <div class="choice" id="c3" role="button" tabindex="0" data-choice=""></div>
+    </div>
   </div>
 </div>
 
-<!-- Ratings modal -->
-<div id="ratingsModal" class="modal"><div class="box">
-  <div style="display:flex;justify-content:space-between;align-items:center"><h3 id="ratingsTitle" style="margin:0">Рейтинг</h3><button id="closeRatings" class="btn" style="height:36px">Закрыть</button></div>
-  <table class="results-table" id="ratingsTable"><thead><tr><th>#</th><th>Игрок</th><th>Очки</th><th>Верных</th></tr></thead><tbody id="ratingsBody"></tbody></table>
-</div></div>
+<!-- Updated modal: results table with icons for correct/incorrect -->
+<div id="modal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+  <div class="modal-card" role="document" aria-labelledby="modalTitle">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+      <div class="modal-title" id="modalTitle" style="font-weight:800;font-size:18px">Итоги игры</div>
+      <button id="modalClose" class="modal-close" aria-label="Закрыть окно результатов">✕</button>
+    </div>
 
-<!-- Final modal -->
-<div id="finalModal" class="modal"><div class="box">
-  <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Итоги игры</h3><button id="closeFinal" class="btn" style="height:36px">Закрыть</button></div>
-  <table class="results-table" id="finalTable"><thead><tr><th>#</th><th>Игрок</th><th>Очки</th><th>Верных</th></tr></thead><tbody id="finalBody"></tbody></table>
-</div></div>
+    <div class="modal-body" style="margin-top:4px">
+      <table id="resultsTable" style="width:100%;border-collapse:collapse;text-align:left">
+        <thead>
+          <tr>
+            <th>Место</th>
+            <th>Игрок</th>
+            <th>Очки</th>
+            <th aria-label="Количество корректных и некорректных ответов">
+              <svg width="20" height="14" viewBox="0 0 20 14" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <g transform="translate(0,0)">
+                  <path d="M2 12v-6h3l1-4 4 6h4v4H2z" fill="#00c853"/>
+                  <path d="M18 2v8h-3l-1 4-4-6H6V4h12z" fill="#ff3860" opacity="0.95"/>
+                </g>
+              </svg>
+            </th>
+          </tr>
+        </thead>
+        <tbody id="resultsBody"></tbody>
+      </table>
+    </div>
+
+    <div style="margin-top:12px;text-align:right">
+      <button id="modalCloseBottom" class="btn" style="min-width:120px;background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted)">Закрыть</button>
+    </div>
+  </div>
+</div>
 
 <script>
-/* Prevent pull-to-refresh on iOS Safari */
-(function disablePullToRefresh() {
-  let startY = 0;
-  let maybePrevent = false;
-  document.addEventListener('touchstart', function(e) {
-    if (e.touches.length !== 1) return;
-    startY = e.touches[0].screenY;
-    maybePrevent = (window.scrollY === 0);
-  }, {passive: true});
-  document.addEventListener('touchmove', function(e) {
-    if (!maybePrevent) return;
-    const curY = e.touches[0].screenY;
-    const deltaY = curY - startY;
-    if (deltaY > 10) e.preventDefault();
-  }, {passive: false});
-})();
+/* Full client logic with improved results modal and renderChoices behavior */
 
-window.addEventListener('keydown', function(e) {
-  if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'r')) e.preventDefault();
-});
-
-/* Refs */
-const TURN_TIME = 12;
 const nameInput = document.getElementById('name');
 const joinBtn = document.getElementById('join');
 const startBtn = document.getElementById('start');
 const ratingBtn = document.getElementById('rating');
 const topicSelect = document.getElementById('topic');
-const formatSelect = document.getElementById('format');
-const studyMethodRow = document.getElementById('studyMethodRow');
-const studyMethodSlot = document.getElementById('studyMethodSlot');
-const studyMethodSelect = document.getElementById('studyMethod');
+
+const playersBox = document.getElementById('playersBox');
+const adminHint = document.getElementById('adminHint');
+
+const gameCard = document.getElementById('gameCard');
 const qtext = document.getElementById('qtext');
 const metaInQ = document.getElementById('metaInQ');
 const imageWrap = document.getElementById('imageWrap');
 const progress = document.getElementById('progress');
 const progressBar = document.getElementById('progressBar');
 const choicesEls = [document.getElementById('c0'),document.getElementById('c1'),document.getElementById('c2'),document.getElementById('c3')];
-const playersBox = document.getElementById('playersBox');
 
-const ratingsModal = document.getElementById('ratingsModal');
-const ratingsBody = document.getElementById('ratingsBody');
-const closeRatings = document.getElementById('closeRatings');
-
-const finalModal = document.getElementById('finalModal');
-const finalBody = document.getElementById('finalBody');
-const closeFinal = document.getElementById('closeFinal');
-
-const studyArea = document.getElementById('studyArea');
-const cardTerm = document.getElementById('cardTerm');
-const cardDef = document.getElementById('cardDef');
-const showAnswer = document.getElementById('showAnswer');
-const knowBtn = document.getElementById('knowBtn');
-const dontKnowBtn = document.getElementById('dontKnowBtn');
-
-const topGrid = document.getElementById('topGrid');
-const mainContainer = document.getElementById('mainContainer');
+const modal = document.getElementById('modal');
+const modalClose = document.getElementById('modalClose');
+const modalCloseBottom = document.getElementById('modalCloseBottom');
 
 let ws = null;
-let showPlayers = false;
+let myName = '';
 let amIAdmin = false;
-let lastTurnTime = TURN_TIME;
-let currentStudyCardId = null;
+let lastTurnTime = 15;
+let myLastChoice = null;
+let clearTimer = null;
 
-/* Helpers */
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
-function setAdminVisible(v){ amIAdmin = !!v; startBtn.style.display = v ? 'inline-block' : 'none'; ratingBtn.style.display = v ? 'inline-block' : 'none'; }
+function initUi(){
+  topicSelect.disabled = true;
+  startBtn.disabled = true;
+  ratingBtn.disabled = true;
+  joinBtn.disabled = true;
+  nameInput.disabled = false;
+  gameCard.classList.add('hidden');
+  document.getElementById('choices').style.display='none';
+  progress.style.display='none';
+  playersBox.textContent='Никто не присоединился';
+  adminHint.textContent='';
+  qtext.textContent='';
+  metaInQ.textContent='';
+}
+initUi();
 
-/* populate topics (keep placeholder) */
-function populateTopics(topics, current){
-  const prev = Array.from(topicSelect.selectedOptions).map(o => o.value) || [];
-  topicSelect.innerHTML = '';
-  const placeholder = document.createElement('option');
-  placeholder.value = '';
-  placeholder.disabled = true;
-  placeholder.selected = true;
-  placeholder.textContent = 'Выбор темы';
-  topicSelect.appendChild(placeholder);
-  topics.forEach(t => {
-    const opt = document.createElement('option'); opt.value = t; opt.textContent = t;
-    if(prev.includes(t)) opt.selected = true;
-    topicSelect.appendChild(opt);
+function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+
+function renderPlayers(names, adminName){
+  if(!names || names.length===0){ playersBox.textContent='Никто не присоединился'; return; }
+  playersBox.innerHTML = names.map(n => n === adminName ? `<div><strong>${escapeHtml(n)}</strong> <span style="color:var(--muted);font-weight:600">— Админ</span></div>` : `<div>${escapeHtml(n)}</div>`).join('');
+}
+
+function populateTopics(topics){
+  topicSelect.innerHTML = '<option value="" disabled selected>Выберите тему</option>';
+  (Array.isArray(topics)?topics:[]).forEach(t=> { const opt = document.createElement('option'); opt.value = t; opt.textContent = t; topicSelect.appendChild(opt); });
+  topicSelect.disabled = false;
+}
+
+function updateProgress(remaining, turn_time){ lastTurnTime = turn_time || lastTurnTime; const clamped = Math.max(0, Math.min(Math.ceil(remaining), lastTurnTime)); const pct = (clamped / lastTurnTime) * 100; progress.style.display='block'; progressBar.style.width = pct + '%'; }
+
+function showImage(src, thumb, question_text){
+  imageWrap.innerHTML = '';
+  const imgSrc = (thumb || src) || '';
+  if(!imgSrc){ imageWrap.style.display='none'; return; }
+  const img = document.createElement('img'); img.loading='lazy'; img.alt=''; img.onerror=()=>{ imageWrap.style.display='none'; }; img.src = imgSrc;
+  imageWrap.appendChild(img); imageWrap.style.display='flex';
+}
+
+function clearChoiceStates(){
+  if(clearTimer){ clearTimeout(clearTimer); clearTimer = null; }
+  myLastChoice = null;
+  choicesEls.forEach(el=>{ el.classList.remove('pressed','disabled','correct','wrong'); el.style.pointerEvents=''; el.setAttribute('aria-pressed','false'); el.setAttribute('aria-disabled','false'); el.innerHTML=''; el.title=''; });
+  document.getElementById('choices').style.display = 'none';
+}
+
+/* renderChoices: insert NBSP before common one-letter russian words to avoid orphans */
+function renderChoices(choices){
+  clearChoiceStates();
+  const container = document.getElementById('choices');
+  container.style.display = 'grid';
+  const safeChoices = Array.isArray(choices)?choices.slice(0,4):[];
+  const singleLetterRegex = /\s([вскуоияёюае])\s/gi;
+  const singleLetterEndRegex = /\s([вскуоияёюае])$/gi;
+  for(let i=0;i<4;i++){
+    const el = choicesEls[i];
+    const raw = (i < safeChoices.length && safeChoices[i] != null) ? safeChoices[i] : '';
+    el.dataset.choice = String(i);
+    el.onclick = null; el.onkeydown = null;
+    el.classList.remove('hidden','pressed','disabled','correct','wrong');
+    el.setAttribute('aria-hidden','false');
+    el.innerHTML = '';
+    el.title = '';
+    const isImg = typeof raw === 'string' && (raw.startsWith('/static/') || raw.startsWith('http://') || raw.startsWith('https://') || raw.match(/\.(png|jpe?g|gif|webp|bmp|svg)$/i));
+    if(!isImg && String(raw).trim()){
+      let text = String(raw);
+      text = text.replace(singleLetterRegex, '\u00A0$1 ');
+      text = text.replace(singleLetterEndRegex, '\u00A0$1');
+      const lbl = document.createElement('span'); lbl.className='choice-label'; lbl.textContent = text;
+      el.appendChild(lbl);
+      el.title = String(raw);
+      el.onclick = ()=>chooseAnswer(i);
+      el.onkeydown = (e)=>{ if(e.key==='Enter' || e.key===' ') chooseAnswer(i); };
+    } else if(isImg){
+      const img = document.createElement('img'); img.className='choice-img'; img.loading='lazy'; img.alt='option'; img.onerror=()=>{ img.style.display='none'; };
+      img.src = raw; el.appendChild(img);
+      el.onclick = ()=>chooseAnswer(i);
+      el.onkeydown = (e)=>{ if(e.key==='Enter' || e.key===' ') chooseAnswer(i); };
+    } else {
+      el.classList.add('hidden'); el.setAttribute('aria-hidden','true');
+    }
+  }
+  if(window.ensureChoiceFit) window.ensureChoiceFit();
+}
+
+function chooseAnswer(choiceIdx){
+  if(myLastChoice !== null) return;
+  myLastChoice = choiceIdx;
+  choicesEls.forEach((c, idx)=>{ c.classList.add('disabled'); c.style.pointerEvents='none'; c.setAttribute('aria-disabled','true'); if(idx===choiceIdx){ c.classList.add('pressed'); c.setAttribute('aria-pressed','true'); } else { c.classList.remove('pressed'); c.setAttribute('aria-pressed','false'); } });
+  wsSend({type:'answer', choice: choiceIdx});
+}
+
+function showTurnResult(correct_index, results){
+  if(clearTimer){ clearTimeout(clearTimer); clearTimer = null; }
+  const myEntry = results && results.find(r=>r.name === myName);
+  const myChoiceIdx = myEntry ? myEntry.choice : myLastChoice;
+  choicesEls.forEach((el, idx) => {
+    el.classList.remove('pressed');
+    if(idx === correct_index){ el.classList.add('correct'); el.classList.remove('wrong'); }
+    else if(myChoiceIdx != null && idx === myChoiceIdx && myChoiceIdx !== correct_index){ el.classList.add('wrong'); el.classList.remove('correct'); }
+    else { el.classList.remove('correct','wrong'); }
+    el.classList.add('disabled'); el.style.pointerEvents='none'; el.setAttribute('aria-disabled','true');
   });
 }
-function getSelectedTopics(){ const v = topicSelect.value; return v ? [v] : []; }
-function showPlayersList(names){ if(!showPlayers) return; playersBox.innerHTML = '<strong>Присоединившиеся:</strong><ul>' + (names||[]).map(n => '<li>' + escapeHtml(n) + '</li>').join('') + '</ul>'; playersBox.style.display = 'block'; }
-function hidePlayersList(){ playersBox.style.display='none'; playersBox.innerHTML=''; }
 
-/* choices enable/disable */
-function enableChoices(){ choicesEls.forEach(el => { el.classList.remove('disabled','pressed','correct','wrong'); el.style.pointerEvents='auto'; el.style.opacity='1'; }); progress.style.display = 'block'; progressBar.style.width = '100%'; }
-function disableChoices(){ choicesEls.forEach(el => { el.classList.add('disabled'); el.style.pointerEvents='none'; }); progress.style.display = 'none'; }
-
-/* click handlers for choices */
-function onChoiceClick(idx){ if(!ws || ws.readyState !== 1) return; choicesEls.forEach(el=>el.classList.remove('pressed')); choicesEls[idx].classList.add('pressed'); ws.send(JSON.stringify({type:'answer', choice: idx})); disableChoices(); }
-choicesEls.forEach((el, idx) => el.addEventListener('click', () => onChoiceClick(idx)));
-
-/* studyMethod: show full-width under top-grid but do NOT disturb right-stack buttons */
-function showStudyMethodFullWidth(){
-  if(studyMethodRow.parentElement !== studyMethodSlot){
-    studyMethodSlot.appendChild(studyMethodRow);
-    studyMethodRow.classList.add('top-wide');
-    studyMethodRow.style.display = 'block';
-  }
-}
-function hideStudyMethodFullWidth(){
-  const leftStack = document.querySelector('.left-stack');
-  if(leftStack && studyMethodRow.parentElement !== leftStack){
-    leftStack.appendChild(studyMethodRow);
-    studyMethodRow.classList.remove('top-wide');
-    studyMethodRow.style.display = 'none';
-  }
-}
-formatSelect.addEventListener('change', () => {
-  if(formatSelect.value === 'study') showStudyMethodFullWidth(); else hideStudyMethodFullWidth();
-});
-
-/* collapse/restore menu for start/end of game — hide topGrid while game runs */
-function collapseMenu(){
-  if(!topGrid.classList.contains('hidden')){
-    topGrid.classList.add('hidden');
-    mainContainer.classList.add('menu-collapsed');
-  }
-}
-function restoreMenu(){
-  if(topGrid.classList.contains('hidden')){
-    topGrid.classList.remove('hidden');
-    mainContainer.classList.remove('menu-collapsed');
-  }
+function scheduleClearAfter(ms=1800){
+  if(clearTimer){ clearTimeout(clearTimer); clearTimer = null; }
+  clearTimer = setTimeout(()=>{ clearTimer = null; clearChoiceStates(); progress.style.display='none'; imageWrap.style.display='none'; qtext.textContent=''; }, ms);
 }
 
-/* image loader fallback with scrollIntoView after load */
-function tryLoadImage(url, onSuccess, onFail){
-  if(!url) { onFail && onFail(new Error('empty url')); return; }
-  const img = new Image();
-  img.onload = () => onSuccess(img);
-  img.onerror = () => onFail && onFail(new Error('load failed ' + url));
-  img.src = url;
+/* --- WebSocket helpers --- */
+function wsUrl(){ return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'; }
+
+function connectWebSocket(name){
+  if(ws && (ws.readyState === 1 || ws.readyState === 0)) return;
+  ws = new WebSocket(wsUrl());
+  ws.addEventListener('open', ()=>{ ws.send(JSON.stringify({type:'join', name: name})); });
+  ws.addEventListener('message', (ev)=>{ try{ const m = JSON.parse(ev.data); handleMessage(m); } catch(e){ console.warn('msg parse', e); } });
+  ws.addEventListener('close', ()=>{ ws = null; initUi(); });
+  ws.addEventListener('error', ()=>{ console.warn('ws error'); });
 }
 
-/* setQuestion: collapse menu when showing image; scroll image to top after load */
-function setQuestion(textOrDefinition, choices, turn_time, imageSrc){
-  studyArea.style.display = 'none';
-  enableChoices();
-  imageWrap.innerHTML = '';
-  imageWrap.style.display = 'none';
-  qtext.textContent = '';
-
-  if(imageSrc){
-    collapseMenu();
-    imageWrap.innerHTML = '<div style="color:var(--muted)">Загрузка изображения…</div>';
-    imageWrap.style.display = 'flex';
-    qtext.textContent = '';
-    tryLoadImage(imageSrc, (imgEl) => {
-      imageWrap.innerHTML = '';
-      imgEl.alt = 'img';
-      imgEl.style.borderRadius = '8px';
-      imgEl.style.maxHeight = '80vh';
-      imgEl.style.objectFit = 'contain';
-      imageWrap.appendChild(imgEl);
-      // scroll image area to top after a brief delay for layout to settle
-      setTimeout(() => {
-        try { imageWrap.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) { window.scrollTo(0,0); }
-      }, 50);
-    }, (err) => {
-      console.warn('thumb failed', err);
-      try {
-        const name = (new URL(imageSrc, location.origin)).pathname.split('/').pop();
-        if(name){
-          const fallback = location.origin + '/static/uploads/' + name;
-          tryLoadImage(fallback, (img2) => {
-            imageWrap.innerHTML = '';
-            img2.alt = 'img';
-            img2.style.borderRadius = '8px';
-            img2.style.maxHeight = '80vh';
-            img2.style.objectFit = 'contain';
-            imageWrap.appendChild(img2);
-            setTimeout(() => {
-              try { imageWrap.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) { window.scrollTo(0,0); }
-            }, 50);
-          }, (err2) => {
-            console.error('fallback failed', err2);
-            imageWrap.innerHTML = '<div style="color:var(--muted)">Не удалось загрузить изображение</div>';
-          });
-        } else {
-          imageWrap.innerHTML = '<div style="color:var(--muted)">Не удалось загрузить изображение</div>';
-        }
-      } catch(e){
-        console.error('fallback error', e);
-        imageWrap.innerHTML = '<div style="color:var(--muted)">Не удалось загрузить изображение</div>';
-      }
-    });
-  } else {
-    imageWrap.style.display = 'none';
-    qtext.textContent = textOrDefinition || '';
-  }
-
-  for(let i=0;i<4;i++){
-    const text = choices && choices[i] ? choices[i] : '';
-    choicesEls[i].textContent = String.fromCharCode(65+i) + ': ' + text;
-  }
-  lastTurnTime = turn_time || TURN_TIME;
-  progressBar.style.width = '100%';
-  progress.style.display = 'block';
+function wsSend(obj){
+  try{
+    const s = JSON.stringify(obj);
+    if(ws && ws.readyState === 1){ ws.send(s); return true; }
+    return false;
+  }catch(e){ console.warn('ws send failed', e); return false; }
 }
 
-/* message handling */
+/* --- New showModal implementation for results --- */
+function showModal(title, rows){
+  document.getElementById('modalTitle').textContent = title || 'Итоги игры';
+  const body = document.getElementById('resultsBody');
+  body.innerHTML = '';
+
+  (Array.isArray(rows) ? rows : []).forEach((r, idx) => {
+    const place = idx + 1;
+    const name = r.name || r.player || '';
+    const points = Number(r.total_points ?? r.points ?? 0);
+    const correct = Number(r.correct ?? r.total_correct ?? r.correct_answers ?? 0);
+    const incorrect = Number(r.incorrect ?? r.wrong ?? r.incorrect_answers ?? 0);
+
+    const medal = place === 1 ? '🏆' : (place === 2 ? '🥈' : (place === 3 ? '🥉' : ''));
+
+    const ciHtml = `
+      <div style="display:inline-flex;gap:10px;align-items:center;justify-content:center">
+        <span title="Верных" style="display:inline-flex;align-items:center;color:#00c853;font-weight:700">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M12 4l5 8h-3v8h-4v-8H7l5-8z" fill="#00c853"/>
+          </svg>
+          <span style="margin-left:6px">${correct}</span>
+        </span>
+        <span title="Неверных" style="display:inline-flex;align-items:center;color:#ff3860;font-weight:700">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M12 20l-5-8h3V4h4v8h4l-5 8z" fill="#ff3860"/>
+          </svg>
+          <span style="margin-left:6px">${incorrect}</span>
+        </span>
+      </div>`;
+
+    const tr = document.createElement('tr');
+    tr.style.borderBottom = '1px solid rgba(255,255,255,0.03)';
+    tr.innerHTML = `
+      <td style="padding:12px;text-align:center;font-weight:800">${place}${medal ? ' ' + medal : ''}</td>
+      <td style="padding:12px;max-width:calc(5ch + 8ch);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(name)}</td>
+      <td style="padding:12px;text-align:center;font-weight:800">${points}</td>
+      <td style="padding:12px;text-align:center">${ciHtml}</td>
+    `;
+    tr.querySelector('td:nth-child(4)').title = `Верных: ${correct}, Неверных: ${incorrect}`;
+    body.appendChild(tr);
+  });
+
+  const modalEl = document.getElementById('modal');
+  modalEl.classList.add('show'); modalEl.setAttribute('aria-hidden','false');
+
+  document.getElementById('modalClose').onclick = hideModal;
+  const bottom = document.getElementById('modalCloseBottom');
+  if(bottom) bottom.onclick = hideModal;
+}
+
+function hideModal(){ const m = document.getElementById('modal'); m.classList.remove('show'); m.setAttribute('aria-hidden','true'); }
+
+/* --- Message handling --- */
 function handleMessage(msg){
   if(!msg || typeof msg !== 'object') return;
   if(msg.type === 'joined'){
-    setAdminVisible(!!msg.is_admin);
-    if(msg.topics) populateTopics(msg.topics, msg.topic || '');
-    if(msg.num_questions != null) metaInQ.textContent = 'Вопросов в игре: ' + msg.num_questions;
+    myName = msg.name || myName;
+    amIAdmin = !!msg.is_admin;
+    if(Array.isArray(msg.topics)) populateTopics(msg.topics);
+    renderPlayers(msg.players || [], msg.is_admin ? myName : null);
+    topicSelect.disabled = false;
+    startBtn.disabled = !(amIAdmin && !!topicSelect.value);
+    ratingBtn.disabled = !topicSelect.value;
     return;
   }
   if(msg.type === 'lobby'){
-    if(msg.topics) populateTopics(msg.topics, msg.topic || '');
-    if(msg.num_questions != null) metaInQ.textContent = 'Вопросов в игре: ' + msg.num_questions;
-    if(showPlayers) showPlayersList(msg.players || []);
+    if(Array.isArray(msg.topics)) populateTopics(msg.topics);
+    renderPlayers(msg.players || [], msg.admin);
+    if(msg.admin) adminHint.textContent = msg.admin === myName ? 'Вы — админ' : `Админ: ${msg.admin}`;
+    startBtn.disabled = !(amIAdmin && !!topicSelect.value);
+    ratingBtn.disabled = !topicSelect.value;
     return;
   }
   if(msg.type === 'game_started'){
-    metaInQ.textContent = '';
-    hidePlayersList();
-    enableChoices();
+    document.getElementById('lobbyCard').classList.add('hidden');
+    gameCard.classList.remove('hidden');
     return;
   }
-
-  function makeUrl(p){
-    if(!p) return null;
-    if(p.startsWith('http://') || p.startsWith('https://')) return p;
-    const path = p.startsWith('/') ? p : '/' + p;
-    return location.origin + path;
-  }
-
   if(msg.type === 'new_question'){
-    const rawThumb = msg.image_thumb || null;
-    const rawImage = msg.image || null;
-    const imageSrc = makeUrl(rawThumb || rawImage);
-    setQuestion(msg.definition || msg.term || '', msg.choices || [], msg.turn_time || TURN_TIME, imageSrc);
+    document.getElementById('choices').style.display = 'grid';
+    gameCard.classList.remove('hidden');
+    clearChoiceStates();
+    const imageSrc = msg.image || null; const thumb = msg.image_thumb || null;
+    if(imageSrc || thumb){ qtext.textContent = ''; showImage(imageSrc, thumb, msg.question_text || ''); } else { qtext.textContent = msg.question_text || msg.term || ''; imageWrap.style.display = 'none'; }
+    renderChoices(msg.choices || []);
+    lastTurnTime = msg.turn_time || lastTurnTime;
     return;
   }
   if(msg.type === 'tick'){
-    updateProgress(msg.remaining != null ? msg.remaining : 0, msg.turn_time || lastTurnTime);
+    updateProgress(msg.remaining || 0, msg.turn_time || lastTurnTime);
     return;
   }
   if(msg.type === 'turn_result'){
-    applyTurnResult(msg.correct_index, msg.results || []);
+    const correct_index = (typeof msg.correct_index === 'number') ? msg.correct_index : null;
+    if(correct_index !== null){
+      showTurnResult(correct_index, Array.isArray(msg.results) ? msg.results : []);
+      scheduleClearAfter(1600);
+    } else {
+      document.getElementById('choices').style.display='none';
+      progress.style.display='none';
+      imageWrap.style.display='none';
+      qtext.textContent='';
+    }
     return;
   }
   if(msg.type === 'game_over'){
-    restoreMenu();
-    renderFinalTable(msg.leaderboard || []);
+    document.getElementById('lobbyCard').classList.remove('hidden');
+    gameCard.classList.add('hidden');
+    const lb = Array.isArray(msg.leaderboard) ? msg.leaderboard : [];
+    const rows = lb.map(r => ({ name: r.name || '', total_points: r.points || 0, correct: r.correct || 0, incorrect: r.incorrect || 0 }));
+    showModal('Итоги игры', rows);
     return;
   }
   if(msg.type === 'ratings'){
-    renderRatings(msg.ratings || [], msg.topic || '');
+    const list = Array.isArray(msg.ratings) ? msg.ratings : [];
+    showModal(`Рейтинг — ${msg.topic || ''}`, list);
     return;
   }
-  if(msg.type === 'study_started'){
-    studyArea.style.display = 'block';
-    qtext.textContent = 'Режим обучения: ' + (msg.method || '');
-    return;
-  }
-  if(msg.type === 'study_card'){
-    studyArea.style.display = 'block';
-    cardDef.style.display = 'none';
-    cardTerm.textContent = msg.term || '';
-    cardDef.textContent = msg.definition || '';
-    currentStudyCardId = msg.card_id || null;
-    return;
-  }
-  if(msg.type === 'study_result'){
-    return;
-  }
-  if(msg.type === 'study_summary'){
-    restoreMenu();
-    renderFinalTable(msg.stats || []);
+  if(msg.type === 'error'){
+    alert(msg.message || 'Ошибка');
     return;
   }
 }
 
-/* progress */
-function updateProgress(remaining, total){
-  const t = total || lastTurnTime || TURN_TIME;
-  const pct = Math.max(0, (remaining / t) * 100);
-  progressBar.style.width = pct + '%';
-  if(remaining <= 0) progress.style.display = 'none'; else progress.style.display = 'block';
-}
+/* --- UI events --- */
+nameInput.addEventListener('input', ()=>{ joinBtn.disabled = !nameInput.value.trim(); });
+joinBtn.addEventListener('click', ()=>{
+  const stored = localStorage.getItem('quiz_name') || '';
+  const raw = nameInput.value || '';
+  const cleaned = String(raw).normalize('NFC').replace(/[\u0000-\u001F\u007F]+/g,'').trim().slice(0,48);
+  const name = cleaned || stored || 'player';
+  myName = name; localStorage.setItem('quiz_name', myName); connectWebSocket(name); nameInput.disabled = true; joinBtn.disabled = true;
+});
 
-/* apply turn result */
-function applyTurnResult(correctIndex, results){
-  for(let i=0;i<4;i++){
-    choicesEls[i].classList.remove('pressed','wrong','correct');
-    choicesEls[i].style.opacity = (i === correctIndex ? '1' : '0.6');
+topicSelect.addEventListener('change', ()=>{ startBtn.disabled = !(amIAdmin && !!topicSelect.value); ratingBtn.disabled = !topicSelect.value; });
+
+startBtn.addEventListener('click', ()=>{
+  if(!ws || ws.readyState !== 1){ alert('Нет соединения'); return; }
+  if(!amIAdmin){ alert('Только админ может стартовать игру'); return; }
+  const selectedTopic = topicSelect.value || '';
+  if(!selectedTopic){ alert('Выберите тему'); return; }
+  wsSend({type:'start_game', format: 'quiz', topics: [selectedTopic]});
+  document.getElementById('lobbyCard').classList.add('hidden');
+});
+
+ratingBtn.addEventListener('click', ()=>{
+  if(!ws || ws.readyState !== 1){ alert('Нет соединения'); return; }
+  const t = topicSelect.value || ''; if(!t){ alert('Выберите тему'); return; }
+  wsSend({type:'get_ratings', format: 'quiz', topic: t});
+});
+
+choicesEls.forEach((el, idx) => { el.addEventListener('keydown', (e)=>{ if(e.key==='Enter' || e.key===' ') chooseAnswer(idx); }); });
+
+modalClose.addEventListener('click', hideModal);
+if(modalCloseBottom) modalCloseBottom.addEventListener('click', hideModal);
+modal.addEventListener('click', (ev)=>{ if(ev.target === modal) hideModal(); });
+
+window.addEventListener('beforeunload', ()=>{ try{ if(ws) ws.close(); }catch(e){} });
+
+/* keep placeholder visible on load; stored name is only fallback */
+(function(){ /* intentionally do not set nameInput.value = stored to preserve placeholder */ })();
+
+/* --- Improved touch handlers: allow scrolling inside modal and inner scrollable elements --- */
+(function(){
+  let startY = 0;
+  let tracking = false;
+
+  function findScrollableAncestor(el){
+    while(el && el !== document.body && el !== document.documentElement){
+      const style = window.getComputedStyle(el);
+      const overflowY = style.overflowY;
+      if((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight) return el;
+      el = el.parentElement;
+    }
+    if(document.documentElement.scrollHeight > document.documentElement.clientHeight) return document.documentElement;
+    return null;
   }
-  if(Number.isInteger(correctIndex) && choicesEls[correctIndex]){
-    choicesEls[correctIndex].classList.add('correct');
+
+  function onTouchStart(e){
+    if(!e.touches || e.touches.length !== 1) return;
+    startY = e.touches[0].clientY;
+    const nearest = findScrollableAncestor(e.target);
+    tracking = !!nearest && (nearest === document.documentElement || nearest === document.body) && (window.scrollY === 0 || document.documentElement.scrollTop === 0);
   }
-  const pressed = document.querySelector('.choice.pressed');
-  if(pressed){
-    const pressedIdx = choicesEls.indexOf(pressed);
-    if(pressedIdx !== -1 && pressedIdx !== correctIndex){
-      choicesEls[pressedIdx].classList.add('wrong');
+
+  function onTouchMove(e){
+    if(!e.touches || e.touches.length !== 1) return;
+    const curY = e.touches[0].clientY;
+    const deltaY = curY - startY;
+
+    const nearest = findScrollableAncestor(e.target);
+    if(nearest && nearest !== document.documentElement && nearest !== document.body){
+      if(deltaY > 0 && nearest.scrollTop > 0) return;
+      if(deltaY < 0 && (nearest.scrollTop + nearest.clientHeight) < nearest.scrollHeight) return;
+    }
+
+    if(tracking && deltaY > 0){
+      e.preventDefault();
     }
   }
-  disableChoices();
-}
 
-/* final and ratings rendering */
-function renderFinalTable(finalList){
-  finalBody.innerHTML = '';
-  (finalList || []).forEach((item, idx) => {
-    const tr = document.createElement('tr');
-    let cls = '';
-    let medal = '';
-    if(idx === 0){ cls = 'result-1'; medal = '🏆 '; }
-    else if(idx === 1){ medal = '🥈 '; }
-    else if(idx === 2){ medal = '🥉 '; }
-    tr.className = cls;
-    tr.innerHTML = '<td>' + (idx+1) + '</td>'
-                 + '<td>' + medal + escapeHtml(item.name || '') + '</td>'
-                 + '<td>' + (item.points||0) + '</td>'
-                 + '<td>' + (item.correct||0) + '</td>';
-    finalBody.appendChild(tr);
-  });
-  finalModal.style.display = 'flex';
-}
-function renderRatings(ratings, topic){
-  ratingsBody.innerHTML = '';
-  (ratings || []).forEach((r, idx) => {
-    const tr = document.createElement('tr');
-    let medal = '';
-    if(idx === 0) medal = '🏆 ';
-    else if(idx === 1) medal = '🥈 ';
-    else if(idx === 2) medal = '🥉 ';
-    tr.innerHTML = '<td>' + (idx+1) + '</td>'
-                 + '<td>' + medal + escapeHtml(r.name || '') + '</td>'
-                 + '<td>' + (r.total_points||0) + '</td>'
-                 + '<td>' + (r.total_correct||0) + '</td>';
-    ratingsBody.appendChild(tr);
-  });
-  ratingsModal.style.display = 'flex';
-}
+  function onTouchEnd(){
+    tracking = false;
+    startY = 0;
+  }
 
-/* study controls */
-showAnswer.addEventListener('click', () => { cardDef.style.display = 'block'; });
-knowBtn.addEventListener('click', () => {
-  if(!ws || ws.readyState !== 1 || !currentStudyCardId) return;
-  ws.send(JSON.stringify({type:'study_feedback', card_id: currentStudyCardId, result:'ok'}));
-  currentStudyCardId = null; cardTerm.textContent = ''; cardDef.textContent = ''; cardDef.style.display = 'none';
-});
-dontKnowBtn.addEventListener('click', () => {
-  if(!ws || ws.readyState !== 1 || !currentStudyCardId) return;
-  ws.send(JSON.stringify({type:'study_feedback', card_id: currentStudyCardId, result:'wrong'}));
-  currentStudyCardId = null; cardTerm.textContent = ''; cardDef.textContent = ''; cardDef.style.display = 'none';
-});
+  document.addEventListener('touchstart', onTouchStart, {passive: true});
+  document.addEventListener('touchmove', onTouchMove, {passive: false});
+  document.addEventListener('touchend', onTouchEnd, {passive: true});
+  document.addEventListener('touchcancel', onTouchEnd, {passive: true});
+})();
 
-/* WebSocket wiring */
-joinBtn.addEventListener('click', () => {
-  const name = nameInput.value.trim(); if(!name){ alert('Введите имя'); return; }
-  if(ws && ws.readyState === 1){ alert('Уже подключены'); return; }
-  try{ ws = new WebSocket(location.origin.replace(/^http/, 'ws') + '/ws'); } catch(e){ alert('Ошибка WebSocket'); return; }
-  showPlayers = true;
-  ws.onopen = ()=> { ws.send(JSON.stringify({type:'join', name})); };
-  ws.onmessage = ev => { try{ const m = JSON.parse(ev.data); handleMessage(m); }catch(e){} };
-  ws.onclose = ()=> { showPlayers=false; hidePlayersList(); ws=null; };
-  ws.onerror = ()=> {};
-});
-
-/* Start: send start and collapse menu immediately, scroll to top so image appears at top */
-startBtn.addEventListener('click', () => {
-  if(!ws || ws.readyState !== 1){ alert('Нет соединения с сервером'); return; }
-  if(!amIAdmin){ alert('Только админ может стартовать игру'); return; }
-  const format = formatSelect.value || 'game';
-  const topics = getSelectedTopics();
-  const payload = {type:'start_game', format, topics};
-  if(format === 'study') payload.study_method = studyMethodSelect.value || 'flashcards';
-  ws.send(JSON.stringify(payload));
-  metaInQ.textContent = '';
-  showPlayers = false;
-  hidePlayersList();
-  collapseMenu();
-  try { window.scrollTo({ top: 0, behavior: 'instant' }); } catch(e) { window.scrollTo(0,0); }
-});
-
-/* Ratings */
-ratingBtn.addEventListener('click', () => {
-  if(!ws || ws.readyState !== 1){ alert('Нет соединения с сервером'); return; }
-  ws.send(JSON.stringify({type:'get_ratings'}));
-});
-
-closeRatings.addEventListener('click', ()=>{ ratingsModal.style.display = 'none'; });
-closeFinal.addEventListener('click', ()=>{ finalModal.style.display = 'none'; });
-
-window.addEventListener('beforeunload', () => { try{ if(ws) ws.close(); } catch(e){} });
+/* ensureChoiceFit: reset styles after resize/orientation change */
+(function(){
+  function ensureChoiceFit(){
+    const container = document.getElementById('choices');
+    if(!container) return;
+    const choices = Array.from(container.querySelectorAll('.choice'));
+    choices.forEach(el=>{
+      el.style.whiteSpace = '';
+      el.style.textOverflow = '';
+      el.style.overflow = '';
+    });
+  }
+  window.ensureChoiceFit = ensureChoiceFit;
+  window.addEventListener('resize', ensureChoiceFit);
+  window.addEventListener('orientationchange', ensureChoiceFit);
+  setTimeout(ensureChoiceFit, 120);
+})();
 </script>
 </body>
 </html>
