@@ -1,0 +1,20 @@
+{
+  "name": "Flags - identify country",
+  "items": [
+    {
+      "term": "/static/quiz/uploads/france_flag.png",
+      "choices": ["Belgium", "France", "Netherlands", "Russia"],
+      "correct": 1
+    },
+    {
+      "term": "/static/quiz/uploads/japan_flag.png",
+      "choices": ["China", "South Korea", "Japan", "Vietnam"],
+      "correct": 2
+    },
+    {
+      "term": "/static/quiz/uploads/italy_flag.png",
+      "choices": ["Ireland", "Italy", "Hungary", "Bulgaria"],
+      "correct": 1
+    }
+  ]
+}

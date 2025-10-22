@@ -1,0 +1,25 @@
+{
+  "name": "Which animal is a penguin (images)",
+  "items": [
+    {
+      "term": "Which of these is a penguin?",
+      "choices": [
+        "/static/quiz/uploads/swan.png",
+        "/static/quiz/uploads/penguin.png",
+        "/static/quiz/uploads/duck.png",
+        "/static/quiz/uploads/albatross.png"
+      ],
+      "correct": 1
+    },
+    {
+      "term": "Which of these is a giraffe?",
+      "choices": [
+        "/static/quiz/uploads/zebra.png",
+        "/static/quiz/uploads/antelope.png",
+        "/static/quiz/uploads/giraffe.png",
+        "/static/quiz/uploads/horse.png"
+      ],
+      "correct": 2
+    }
+  ]
+}
