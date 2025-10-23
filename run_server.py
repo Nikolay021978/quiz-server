@@ -26,12 +26,11 @@ from PIL import Image, ImageOps
 # ---------------------------
 # Configuration
 # ---------------------------
-TURN_TIME_QUIZ = 15
-TURN_TIME_DEFAULT = 30
-ROUND_DELAY = 0.8
-NUM_QUESTIONS = 5
+TURN_TIME_QUIZ = 40 # время на ответ для формата quiz (в секундах)
+ROUND_DELAY = 0.8 # задержка между турами (в секундах)
+NUM_QUESTIONS = 5 # число вопросов в раунде
 
-THUMB_SIZE = "200x200"
+THUMB_SIZE = "200x200" # размер миниатюр
 
 BASE_DIR = os.path.dirname(__file__) or "."
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -160,15 +159,13 @@ def _load_single_topic_file(path: str) -> Optional[Tuple[str, List[dict]]]:
         return None
     return (str(name), parsed)
 
-def load_topics_from_dir() -> Dict[str, Dict[str, List[dict]]]:
+def load_topics_from_dir() -> Dict[str, List[dict]]:
     """
-    Strictly load topics only from topics/quiz/*.json into format 'quiz'.
-    Return map: { 'quiz': { topic_name: [items...] } }
+    Load topics from topics/quiz/*.json.
+    Return map: { topic_name: [items...] }
     """
     _ensure_topics_dir()
-    formats_map: Dict[str, Dict[str, List[dict]]] = {}
-    fm = "quiz"
-    formats_map[fm] = {}
+    topics_map: Dict[str, List[dict]] = {}
     pattern = os.path.join(QUIZ_SUBDIR, "*.json")
     files = sorted(glob.glob(pattern), key=os.path.basename)
     if not files:
@@ -177,13 +174,13 @@ def load_topics_from_dir() -> Dict[str, Dict[str, List[dict]]]:
         res = _load_single_topic_file(path)
         if res:
             tname, items = res
-            if tname in formats_map[fm]:
+            if tname in topics_map:
                 log.warning("Duplicate topic name %s in topics/quiz — skipping %s", tname, path)
                 continue
-            formats_map[fm][tname] = items
+            topics_map[tname] = items
             img_count = sum(1 for it in items if isinstance(it.get("image"), str) and it.get("image"))
-            log.info("Loaded topic '%s' (%d items, %d images) into format 'quiz' from %s", tname, len(items), img_count, path)
-    return formats_map
+            log.info("Loaded topic '%s' (%d items, %d images) from %s", tname, len(items), img_count, path)
+    return topics_map
 
 # ---------------------------
 # Ratings persistence
@@ -244,13 +241,13 @@ async def save_ratings(ratings: Dict[str, Dict[str, Dict[str, int]]]):
         except Exception:
             log.exception("Failed to save ratings.json")
 
-async def update_ratings_after_game(format_name: str, topic: str, per_player_final: List[Dict]):
-    if not isinstance(format_name, str) or not isinstance(topic, str):
+async def update_ratings_after_game(topic: str, per_player_final: List[Dict]):
+    if not isinstance(topic, str):
         return
     if not per_player_final:
         return
     ratings = await load_ratings()
-    map_key = f"{format_name}|{topic}"
+    map_key = f"quiz|{topic}"
     topic_map = ratings.get(map_key, {})
     if not isinstance(topic_map, dict):
         topic_map = {}
@@ -274,9 +271,9 @@ async def update_ratings_after_game(format_name: str, topic: str, per_player_fin
     ratings[map_key] = topic_map
     await save_ratings(ratings)
 
-async def get_ratings_for_format_topic(format_name: str, topic: str, top_n: Optional[int] = None) -> List[Dict]:
+async def get_ratings_for_topic(topic: str, top_n: Optional[int] = None) -> List[Dict]:
     ratings = await load_ratings()
-    map_key = f"{format_name}|{topic}"
+    map_key = f"quiz|{topic}"
     topic_map = ratings.get(map_key, {}) or {}
     items = []
     for name, stats in topic_map.items():
@@ -322,22 +319,21 @@ class Player:
         self.score = 0
         self.points = 0
         self.streak = 0
+        self.wrong = 0
         self.join_ts = time.time()
         self.last_answer_ts = 0.0
 
     def __repr__(self):
-        return f"<Player {self.name} pts={self.points} score={self.score}>"
+        return f"<Player {self.name} pts={self.points} score={self.score} wrong={self.wrong}>"
 
 class QuizServer:
-    def __init__(self, topics_by_format: Dict[str, Dict[str, List[dict]]]):
+    def __init__(self, topics_map: Dict[str, List[dict]]):
         self.players: "OrderedDict[str, Player]" = OrderedDict()
         self.lock = asyncio.Lock()
-        self.topics_by_format = topics_by_format or {}
-        self.available_formats = list(self.topics_by_format.keys())
-        self.current_format: str = self.available_formats[0] if self.available_formats else "quiz"
-        self.available_topics = list(self.topics_by_format.get(self.current_format, {}).keys())
+        self.topics = topics_map or {}
+        self.available_topics = list(self.topics.keys())
         self.current_topic: str = self.available_topics[0] if self.available_topics else ""
-        self.questions: List[Tuple[str, str]] = self._prepare_questions([self.current_topic], self.current_format) if self.current_topic else []
+        self.questions: List[Tuple[str, str]] = self._prepare_questions([self.current_topic]) if self.current_topic else []
         self.current_qidx: int = 0
         self.current_choices: Optional[List[str]] = None
         self.current_correct: Optional[int] = None
@@ -348,26 +344,25 @@ class QuizServer:
         self.current_question_start_ts: Optional[float] = None
         self._q_topics: Dict[int, str] = {}
 
-    def _prepare_questions(self, topics: Optional[List[str]], fmt: Optional[str] = None) -> List[Tuple[str, str]]:
-        fmt = fmt or self.current_format
+    def _prepare_questions(self, topics: Optional[List[str]] = None) -> List[Tuple[str, str]]:
         pool: List[Tuple[str, str, str]] = []
-        selected = topics or ([self.current_topic] if self.current_topic else list(self.topics_by_format.get(fmt, {}).keys()))
+        selected = topics or ([self.current_topic] if self.current_topic else list(self.topics.keys()))
         for t in selected:
-            items = self.topics_by_format.get(fmt, {}).get(t, [])
+            items = self.topics.get(t, [])
             if not items:
-                log.debug("_prepare_questions: no items for topic=%s format=%s", t, fmt)
+                log.debug("_prepare_questions: no items for topic=%s", t)
             for item in items:
                 term = item.get("term", "") or item.get("name", "")
                 definition = item.get("definition", "") or item.get("def") or ""
                 pool.append((term, definition, t))
         if not pool:
-            log.warning("_prepare_questions: empty pool for fmt=%s topics=%s", fmt, selected)
+            log.warning("_prepare_questions: empty pool for topics=%s", selected)
             self._q_topics = {}
             return []
         k = min(len(pool), NUM_QUESTIONS)
         sampled = random.sample(pool, k=k)
         self._q_topics = {i: sampled[i][2] for i in range(len(sampled))}
-        log.info("_prepare_questions: selected %d questions for fmt=%s topics=%s", len(sampled), fmt, selected)
+        log.info("_prepare_questions: selected %d questions for topics=%s", len(sampled), selected)
         return [(s[0], s[1]) for s in sampled]
 
     async def send(self, player: Player, msg: dict):
@@ -409,7 +404,6 @@ class QuizServer:
         if not players_items:
             return
 
-        # fixed parallelism: avoid unbounded factor growth
         parallel_limit = min(20, max(3, len(players_items)))
         sem = asyncio.Semaphore(parallel_limit)
 
@@ -458,9 +452,7 @@ class QuizServer:
         async with self.lock:
             players = list(self.players.keys())
             admin = self.admin
-            current_format = self.current_format
-            formats = self.available_formats
-            topics = list(self.topics_by_format.get(current_format, {}).keys()) or []
+            topics = list(self.topics.keys()) or []
             current_topic = self.current_topic or (topics[0] if topics else "")
             players_map = dict(self.players)
 
@@ -471,8 +463,7 @@ class QuizServer:
                     "players": players,
                     "admin": admin,
                     "is_admin": (pname == admin),
-                    "format": current_format,
-                    "formats": formats,
+                    "format": "quiz",
                     "topics": topics,
                     "current_topic": current_topic,
                     "num_questions": NUM_QUESTIONS
@@ -503,9 +494,8 @@ class QuizServer:
             "type": "joined",
             "name": name,
             "is_admin": (name == self.admin),
-            "format": self.current_format,
-            "formats": self.available_formats,
-            "topics": list(self.topics_by_format.get(self.current_format, {}).keys()) or [],
+            "format": "quiz",
+            "topics": list(self.topics.keys()) or [],
             "current_topic": self.current_topic or "",
             "num_questions": NUM_QUESTIONS,
             "players": list(self.players.keys())
@@ -547,14 +537,14 @@ class QuizServer:
                         await self.send(pl, {"type":"error", "message":"Нельзя менять тему во время игры"})
                     log.info("choose_topic ignored while game running by %s", name)
                     return
-                if topic not in self.topics_by_format.get(self.current_format, {}):
+                if topic not in self.topics:
                     pl = self.players.get(name)
                     if pl:
                         await self.send(pl, {"type":"error", "message":"Неизвестная тема"})
                     log.warning("choose_topic unknown topic %r by %s", topic, name)
                     return
                 self.current_topic = topic
-                self.questions = self._prepare_questions([self.current_topic], self.current_format)
+                self.questions = self._prepare_questions([self.current_topic])
                 self.current_qidx = 0
             await self.broadcast_lobby()
             return
@@ -575,16 +565,7 @@ class QuizServer:
                     log.info("start_game ignored: game already running (requester=%s)", name)
                     return
 
-                fmt = msg.get("format", "quiz")
                 topics = msg.get("topics")
-
-                if not isinstance(fmt, str) or fmt not in self.topics_by_format:
-                    log.warning("start_game aborted: invalid format requested: %s by %s", fmt, name)
-                    pl = self.players.get(name)
-                    if pl:
-                        await self.send(pl, {"type":"error", "message":"Неверный формат игры"})
-                    return
-
                 if not isinstance(topics, list) or not topics or not all(isinstance(x, str) for x in topics):
                     log.warning("start_game aborted: topics missing or invalid from %s: %r", name, topics)
                     pl = self.players.get(name)
@@ -592,7 +573,7 @@ class QuizServer:
                         await self.send(pl, {"type":"error", "message":"Укажите тему(ы) для старта игры"})
                     return
 
-                invalid = [t for t in topics if t not in self.topics_by_format.get(fmt, {})]
+                invalid = [t for t in topics if t not in self.topics]
                 if invalid:
                     log.warning("start_game aborted: unknown topics %s requested by %s", invalid, name)
                     pl = self.players.get(name)
@@ -600,22 +581,28 @@ class QuizServer:
                         await self.send(pl, {"type":"error", "message":f"Неизвестные темы: {', '.join(invalid)}"})
                     return
 
-                self.current_format = fmt
                 self.current_topic = topics[0]
-                self.questions = self._prepare_questions(topics, fmt)
+                self.questions = self._prepare_questions(topics)
                 self.current_qidx = 0
 
                 if not self.questions:
-                    log.warning("start_game aborted: no questions for format=%s topics=%s", fmt, topics)
+                    log.warning("start_game aborted: no questions for topics=%s", topics)
                     pl = self.players.get(name)
                     if pl:
                         await self.send(pl, {"type":"error", "message":"Нет вопросов для выбранной темы. Проверьте файлы в topics/quiz."})
                     return
 
+                # reset per-player stats at game start
+                for p in self.players.values():
+                    p.score = 0
+                    p.points = 0
+                    p.streak = 0
+                    p.wrong = 0
+
                 self.game_running = True
-                self._last_game_context = {"format": fmt, "topics": topics}
+                self._last_game_context = {"topics": topics}
                 self._game_task = asyncio.create_task(self._run_quiz())
-                log.info("start_game accepted by %s for format=%s topics=%s", name, fmt, topics)
+                log.info("start_game accepted by %s for topics=%s", name, topics)
             return
 
         if t == "answer":
@@ -633,7 +620,7 @@ class QuizServer:
                     return
                 if ci < 0 or ci >= len(self.current_choices):
                     return
-                turn_time = TURN_TIME_QUIZ if self.current_format == "quiz" else TURN_TIME_DEFAULT
+                turn_time = TURN_TIME_QUIZ
                 if not self.current_question_start_ts or time.time() - self.current_question_start_ts > (turn_time + 5):
                     return
                 pl = self.players.get(name)
@@ -647,45 +634,28 @@ class QuizServer:
 
         if t == "get_ratings":
             req_topic = msg.get("topic")
-            req_format = msg.get("format")
-            chosen_format = None
             chosen_topic = None
 
-            if isinstance(req_format, str) and isinstance(req_topic, str):
-                if req_format in self.topics_by_format and req_topic in self.topics_by_format.get(req_format, {}):
-                    chosen_format = req_format
-                    chosen_topic = req_topic
-
-            if chosen_topic is None and isinstance(req_topic, str):
-                if req_topic in self.topics_by_format.get(self.current_format, {}):
-                    chosen_format = self.current_format
-                    chosen_topic = req_topic
-
-            if chosen_topic is None and isinstance(req_topic, str):
-                for fm, topics in self.topics_by_format.items():
-                    if req_topic in topics:
-                        chosen_format = fm
-                        chosen_topic = req_topic
-                        break
+            if isinstance(req_topic, str) and req_topic in self.topics:
+                chosen_topic = req_topic
 
             if chosen_topic is None:
-                if getattr(self, "current_topic", None) and self.current_topic in self.topics_by_format.get(self.current_format, {}):
-                    chosen_format = self.current_format
+                if getattr(self, "current_topic", None) and self.current_topic in self.topics:
                     chosen_topic = self.current_topic
 
             ratings = []
-            if chosen_format and chosen_topic:
+            if chosen_topic:
                 try:
-                    ratings = await get_ratings_for_format_topic(chosen_format, chosen_topic, top_n=200)
+                    ratings = await get_ratings_for_topic(chosen_topic, top_n=200)
                 except Exception:
-                    log.exception("Failed to load ratings for %s|%s", chosen_format, chosen_topic)
+                    log.exception("Failed to load ratings for quiz|%s", chosen_topic)
                     ratings = []
 
             if name in self.players:
                 await self.send(self.players[name], {
                     "type": "ratings",
-                    "format": chosen_format or self.current_format,
-                    "topic": chosen_topic or (req_topic or self.current_topic or ""),
+                    "format": "quiz",
+                    "topic": chosen_topic or "",
                     "ratings": ratings
                 })
             return
@@ -701,6 +671,7 @@ class QuizServer:
                     p.score = 0
                     p.points = 0
                     p.streak = 0
+                    p.wrong = 0
             await self.broadcast({"type": "game_started", "format": "quiz", "topic": self.current_topic, "num_questions": NUM_QUESTIONS})
 
             total = len(self.questions)
@@ -717,7 +688,7 @@ class QuizServer:
                     q_topic = self._q_topics.get(self.current_qidx, self.current_topic)
 
                     original_item = None
-                    for raw in self.topics_by_format.get('quiz', {}).get(q_topic, []):
+                    for raw in self.topics.get(q_topic, []):
                         raw_term = raw.get("term", "") or raw.get("name", "")
                         raw_def = raw.get("definition") or raw.get("def") or ""
                         if str(raw_term) == str(term) and (not raw_def or str(raw_def) == str(definition)):
@@ -725,41 +696,21 @@ class QuizServer:
                             break
 
                     if original_item and isinstance(original_item.get("choices"), list) and len(original_item.get("choices")) > 0:
-                        # take up to 4 raw choices and detect which one is correct
-                        raw_choices = [str(x) for x in original_item.get("choices")][:4]
-                        try:
-                            correct_idx = int(original_item.get("correct")) if original_item.get("correct") is not None else None
-                        except Exception:
-                            correct_idx = None
-
-                        # pad to length 4
-                        while len(raw_choices) < 4:
-                            raw_choices.append("")
-
-                        # ensure correct_idx is valid for truncated list
-                        if len(raw_choices) > 4:
-                            raw_choices = raw_choices[:4]
-                            if correct_idx is not None and correct_idx >= len(raw_choices):
+                        choices = [str(x) for x in original_item.get("choices")][:4]
+                        correct_idx = None
+                        if original_item.get("correct") is not None:
+                            try:
+                                correct_idx = int(original_item.get("correct"))
+                            except Exception:
                                 correct_idx = None
-
-                        # build (choice, is_correct) pairs and shuffle them
-                        pairs = []
-                        for i, ch in enumerate(raw_choices):
-                            is_correct = (i == correct_idx)
-                            pairs.append([ch, is_correct])
-
-                        random.shuffle(pairs)
-
-                        # extract shuffled choices and find new correct index
-                        choices = [str(p[0]) for p in pairs]
-                        new_correct = None
-                        for i, p in enumerate(pairs):
-                            if p[1]:
-                                new_correct = i
-                                break
-                        correct_idx = new_correct if new_correct is not None else None
+                        while len(choices) < 4:
+                            choices.append("")
+                        if len(choices) > 4:
+                            choices = choices[:4]
+                            if correct_idx is not None and correct_idx >= len(choices):
+                                correct_idx = None
                     else:
-                        same_topic_items = self.topics_by_format.get('quiz', {}).get(q_topic, [])
+                        same_topic_items = self.topics.get(q_topic, [])
                         same_topic_terms = [it.get("term") or it.get("name") for it in same_topic_items if (it.get("term") or it.get("name")) and (it.get("term") or it.get("name")) != term]
                         random.shuffle(same_topic_terms)
                         wrong_choices = []
@@ -793,7 +744,6 @@ class QuizServer:
                     "question_topic": q_topic
                 }
 
-                # original behavior restored: send image and image_thumb (client handles missing thumb)
                 image_path = None
                 if _is_image_path(term):
                     image_path = term
@@ -814,7 +764,6 @@ class QuizServer:
                         payload["definition"] = definition
                     payload["question_text"] = term if term else (definition if definition else "")
 
-                # ensure thumb folder for THUMB_SIZE exists (prepare once)
                 try:
                     os.makedirs(os.path.join(QUIZ_THUMBS_DIR, THUMB_SIZE), exist_ok=True)
                 except Exception:
@@ -841,8 +790,9 @@ class QuizServer:
                         choice_idx, ans_ts = int(ans[0]), float(ans[1])
                         ok = (choice_idx == correct_index_snapshot)
                     else:
-                        choice_idx, ans_ts = None, None
+                        choice_idx, ans_ts = -1, None
                         ok = False
+
                     points_earned = 0
                     if ok:
                         p.score += 1
@@ -855,12 +805,14 @@ class QuizServer:
                         p.points += points_earned
                     else:
                         p.streak = 0
+                        p.wrong += 1
 
                     results.append({
                         "name": pname,
                         "choice": choice_idx,
                         "correct": ok,
                         "correct_count": p.score,
+                        "incorrect": p.wrong,
                         "points_earned": points_earned,
                         "points": p.points,
                         "streak": p.streak
@@ -868,7 +820,7 @@ class QuizServer:
 
                 async with self.lock:
                     leader_by_points = sorted(
-                        [{"name": pname, "points": p.points, "correct": p.score} for pname, p in self.players.items()],
+                        [{"name": pname, "points": p.points, "correct": p.score, "incorrect": p.wrong} for pname, p in self.players.items()],
                         key=lambda x: -x["points"]
                     )
 
@@ -897,7 +849,7 @@ class QuizServer:
         finally:
             async with self.lock:
                 final_lb = sorted(
-                    [{"name": n, "correct": p.score, "points": p.points} for n, p in self.players.items()],
+                    [{"name": n, "correct": p.score, "incorrect": p.wrong, "points": p.points} for n, p in self.players.items()],
                     key=lambda x: -x["points"]
                 )
                 self.game_running = False
@@ -911,12 +863,11 @@ class QuizServer:
             try:
                 ctx = getattr(self, "_last_game_context", None)
                 if ctx and isinstance(ctx, dict):
-                    fmt = ctx.get("format", "quiz")
                     topics = ctx.get("topics", [self.current_topic])
                     for t in topics:
-                        await update_ratings_after_game(fmt, t, final_lb)
+                        await update_ratings_after_game(t, final_lb)
                 else:
-                    await update_ratings_after_game('quiz', self.current_topic, final_lb)
+                    await update_ratings_after_game(self.current_topic, final_lb)
             except Exception:
                 log.exception("Failed to update ratings after game")
 
@@ -1072,27 +1023,17 @@ async def thumb_plain_quiz_handler(request):
 async def reload_topics_handler(request):
     global quiz_server
     try:
-        newmap = load_topics_from_dir()
-        if not newmap or not newmap.get("quiz"):
+        new_topics = load_topics_from_dir()
+        if not new_topics:
             return web.json_response({"ok": False, "error": "no topics found after reload"}, status=400)
-
-        compact = {}
-        for fmt, topics in newmap.items():
-            try:
-                compact[fmt] = list(topics.keys())
-            except Exception:
-                compact[fmt] = []
 
         if quiz_server:
             async with quiz_server.lock:
-                quiz_server.topics_by_format = newmap
-                quiz_server.available_formats = list(newmap.keys())
-                if quiz_server.current_format not in quiz_server.available_formats:
-                    quiz_server.current_format = quiz_server.available_formats[0] if quiz_server.available_formats else "quiz"
-                quiz_server.available_topics = list(newmap.get(quiz_server.current_format, {}).keys())
+                quiz_server.topics = new_topics
+                quiz_server.available_topics = list(new_topics.keys())
                 if not quiz_server.current_topic and quiz_server.available_topics:
                     quiz_server.current_topic = quiz_server.available_topics[0]
-                quiz_server.questions = quiz_server._prepare_questions([quiz_server.current_topic], quiz_server.current_format) if quiz_server.current_topic else []
+                quiz_server.questions = quiz_server._prepare_questions([quiz_server.current_topic]) if quiz_server.current_topic else []
                 quiz_server.current_qidx = 0
 
         try:
@@ -1101,19 +1042,19 @@ async def reload_topics_handler(request):
         except Exception:
             log.exception("broadcast_lobby failed after reload")
 
-        return web.json_response({"ok": True, "formats": list(newmap.keys()), "topics_by_format": compact})
+        compact = { "quiz": list(new_topics.keys()) }
+        return web.json_response({"ok": True, "topics": compact})
     except Exception as e:
         log.exception("reload topics failed")
         return web.json_response({"ok": False, "error": str(e)}, status=500)
 
 async def get_ratings_api_handler(request):
-    fmt = request.query.get("format", "")
     topic = request.query.get("topic", "")
-    if not fmt or not topic:
-        return web.json_response({"ok": False, "error": "format and topic required"}, status=400)
+    if not topic:
+        return web.json_response({"ok": False, "error": "topic required"}, status=400)
     try:
-        lst = await get_ratings_for_format_topic(fmt, topic, top_n=200)
-        return web.json_response({"ok": True, "format": fmt, "topic": topic, "ratings": lst})
+        lst = await get_ratings_for_topic(topic, top_n=200)
+        return web.json_response({"ok": True, "format": "quiz", "topic": topic, "ratings": lst})
     except Exception:
         log.exception("get_ratings_api_handler failed")
         return web.json_response({"ok": False, "error": "internal"}, status=500)
@@ -1171,7 +1112,7 @@ async def ws_handler(request):
             pass
     return ws
 
-def create_app(topics_map: Dict[str, Dict[str, List[dict]]]):
+def create_app(topics_map: Dict[str, List[dict]]):
     global quiz_server
     quiz_server = QuizServer(topics_map)
     app = web.Application()
@@ -1214,10 +1155,10 @@ if __name__ == "__main__":
         sys.exit(1)
     _ensure_topics_dir()
     loaded = load_topics_from_dir()
-    if not loaded or not loaded.get("quiz"):
+    if not loaded:
         log.error("No valid topic files found in %s. Please add JSON files (UTF-8) into topics/quiz with questions; exiting.", QUIZ_SUBDIR)
         sys.exit(1)
-    log.info("Using formats: %s", ", ".join(sorted(loaded.keys())))
+    log.info("Loaded topics: %s", ", ".join(sorted(loaded.keys())))
     args = parse_args()
     try:
         app = create_app(loaded)

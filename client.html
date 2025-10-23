@@ -74,7 +74,7 @@ html, body {
 .btn:active{ transform:translateY(2px) }
 .btn:disabled{ opacity:0.55; cursor:default; transform:none; box-shadow:none }
 
-#join{ --btn-bg: #1e90ff; --btn-color:#fff; font-weight:700 }
+#join{ --btn-bg: #800020; --btn-color:#fff; font-weight:700 }
 #rating{ --btn-bg: #ffd54f; --btn-color:#111; font-weight:700 }
 #start{ --btn-bg: #10b981; --btn-color:#042010; font-weight:800 }
 
@@ -201,7 +201,7 @@ html, body {
 #resultsTable thead th:nth-child(3) { width:66px; min-width:56px; max-width:86px; text-align:center; }
 #resultsTable thead th:nth-child(4) { width:96px; min-width:80px; max-width:120px; text-align:center; }
 
-/* name column: reduced to fit ~5 letters (ch units approximate character width) */
+/* name column: reduced to fit ~5 characters (ch units approximate character width) */
 #resultsTable thead th:nth-child(2) { width: calc(100% - 56px - 66px - 96px); min-width: calc(5ch + 6ch); text-align:left; }
 
 /* body rows and cells */
@@ -270,6 +270,31 @@ html, body {
   .choice{ font-size: 16px; padding: 10px; min-height:56px; }
   .choice .choice-label{ font-size:15px; }
 }
+
+/* ====== New styles for focus-up mode (hide top controls and lift game area) ====== */
+.focus-up .top-grid,
+.focus-up .lobby-header,
+.focus-up #adminHint,
+.focus-up .field,
+.focus-up .start-wrapper {
+  display: none !important;
+}
+
+.focus-up .container {
+  padding-top: 8px;
+}
+
+.focus-up #gameCard {
+  margin-top: 0 !important;
+  transform: translateY(-6px);
+  transition: transform .18s ease;
+}
+
+.focus-up #lobbyCard { display: none !important; }
+
+/* smooth transitions for question card and choices */
+#gameCard { transition: transform .18s ease, margin-top .18s ease; }
+.choice:focus { outline: 3px solid rgba(30,144,255,0.12); outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -285,7 +310,7 @@ html, body {
     <div style="display:flex;flex-direction:column;gap:var(--gutter)">
       <div>
         <div class="field">
-          <button id="join" class="btn" type="button" disabled>Connect</button>
+          <button id="join" class="btn" type="button" disabled>Соединить</button>
           <button id="rating" class="btn" type="button" disabled>Рейтинг</button>
         </div>
       </div>
@@ -398,7 +423,8 @@ function initUi(){
   playersBox.textContent='Никто не присоединился';
   adminHint.textContent='';
   qtext.textContent='';
-  metaInQ.textContent='';
+  // ensure focus-up removed when UI is reset
+  document.body.classList.remove('focus-up');
 }
 initUi();
 
@@ -588,11 +614,21 @@ function handleMessage(msg){
     if(msg.admin) adminHint.textContent = msg.admin === myName ? 'Вы — админ' : `Админ: ${msg.admin}`;
     startBtn.disabled = !(amIAdmin && !!topicSelect.value);
     ratingBtn.disabled = !topicSelect.value;
+    // ensure top controls visible when lobby is shown
+    document.body.classList.remove('focus-up');
     return;
   }
   if(msg.type === 'game_started'){
     document.getElementById('lobbyCard').classList.add('hidden');
     gameCard.classList.remove('hidden');
+    // if game started (possibly by another client), hide top controls and lift question area
+    document.body.classList.add('focus-up');
+    setTimeout(()=>{
+      const gc = document.getElementById('gameCard');
+      if (gc && typeof gc.scrollIntoView === 'function') gc.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const firstChoice = document.getElementById('c0');
+      if (firstChoice) firstChoice.focus();
+    }, 90);
     return;
   }
   if(msg.type === 'new_question'){
@@ -603,6 +639,14 @@ function handleMessage(msg){
     if(imageSrc || thumb){ qtext.textContent = ''; showImage(imageSrc, thumb, msg.question_text || ''); } else { qtext.textContent = msg.question_text || msg.term || ''; imageWrap.style.display = 'none'; }
     renderChoices(msg.choices || []);
     lastTurnTime = msg.turn_time || lastTurnTime;
+
+    // поднять вопрос в видимую область и фокусировать первый вариант
+    setTimeout(() => {
+      const gc = document.getElementById('gameCard');
+      if (gc && typeof gc.scrollIntoView === 'function') gc.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const firstChoice = document.getElementById('c0');
+      if (firstChoice) firstChoice.focus();
+    }, 60);
     return;
   }
   if(msg.type === 'tick'){
@@ -628,6 +672,8 @@ function handleMessage(msg){
     const lb = Array.isArray(msg.leaderboard) ? msg.leaderboard : [];
     const rows = lb.map(r => ({ name: r.name || '', total_points: r.points || 0, correct: r.correct || 0, incorrect: r.incorrect || 0 }));
     showModal('Итоги игры', rows);
+    // вернуть интерфейс обратно
+    document.body.classList.remove('focus-up');
     return;
   }
   if(msg.type === 'ratings'){
@@ -660,6 +706,18 @@ startBtn.addEventListener('click', ()=>{
   if(!selectedTopic){ alert('Выберите тему'); return; }
   wsSend({type:'start_game', format: 'quiz', topics: [selectedTopic]});
   document.getElementById('lobbyCard').classList.add('hidden');
+
+  // поднимаем окно с вопросом и скрываем верхние элементы для минимизации отвлечений
+  document.body.classList.add('focus-up');
+
+  // плавно прокрутить вопрос в начало видимой области
+  setTimeout(() => {
+    const gc = document.getElementById('gameCard');
+    if (gc && typeof gc.scrollIntoView === 'function') gc.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // фокус на первом варианте для удобства клавиатуры
+    const firstChoice = document.getElementById('c0');
+    if (firstChoice) firstChoice.focus();
+  }, 80);
 });
 
 ratingBtn.addEventListener('click', ()=>{
