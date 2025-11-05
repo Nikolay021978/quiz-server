@@ -26,7 +26,7 @@ from PIL import Image, ImageOps
 # ---------------------------
 # Configuration
 # ---------------------------
-TURN_TIME_QUIZ = 40 # время на ответ для формата quiz (в секундах)
+TURN_TIME_QUIZ = 15 # время на ответ для формата quiz (в секундах)
 ROUND_DELAY = 0.8 # задержка между турами (в секундах)
 NUM_QUESTIONS = 5 # число вопросов в раунде
 
@@ -696,19 +696,32 @@ class QuizServer:
                             break
 
                     if original_item and isinstance(original_item.get("choices"), list) and len(original_item.get("choices")) > 0:
-                        choices = [str(x) for x in original_item.get("choices")][:4]
-                        correct_idx = None
+                        # Use provided choices but shuffle them so correct answer isn't always at same position.
+                        raw_choices = [str(x) for x in original_item.get("choices")][:4]
+                        # Determine the correct value if a correct index is provided
+                        correct_raw = None
                         if original_item.get("correct") is not None:
                             try:
-                                correct_idx = int(original_item.get("correct"))
+                                idx = int(original_item.get("correct"))
+                                if 0 <= idx < len(raw_choices):
+                                    correct_raw = raw_choices[idx]
                             except Exception:
-                                correct_idx = None
-                        while len(choices) < 4:
-                            choices.append("")
-                        if len(choices) > 4:
-                            choices = choices[:4]
-                            if correct_idx is not None and correct_idx >= len(choices):
-                                correct_idx = None
+                                correct_raw = None
+
+                        # ensure list has 4 entries (pad with empty strings if needed)
+                        while len(raw_choices) < 4:
+                            raw_choices.append("")
+
+                        # shuffle and recompute correct index by value
+                        choices = raw_choices[:4]
+                        random.shuffle(choices)
+                        correct_idx = None
+                        if correct_raw is not None:
+                            for i, c in enumerate(choices):
+                                if c == correct_raw:
+                                    correct_idx = i
+                                    break
+                        # if correct_raw was not identifiable, keep as None (server will treat accordingly)
                     else:
                         same_topic_items = self.topics.get(q_topic, [])
                         same_topic_terms = [it.get("term") or it.get("name") for it in same_topic_items if (it.get("term") or it.get("name")) and (it.get("term") or it.get("name")) != term]
