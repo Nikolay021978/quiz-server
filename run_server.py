@@ -26,7 +26,7 @@ from PIL import Image, ImageOps
 # ---------------------------
 # Configuration
 # ---------------------------
-TURN_TIME_QUIZ = 15 # время на ответ для формата quiz (в секундах)
+TURN_TIME_QUIZ = 40 # время на ответ для формата quiz (в секундах)
 ROUND_DELAY = 0.8 # задержка между турами (в секундах)
 NUM_QUESTIONS = 5 # число вопросов в раунде
 
