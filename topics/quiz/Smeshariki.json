@@ -1,0 +1,136 @@
+{
+  "name": "Смешарики — смешанная викторина",
+  "items": [
+    {
+      "term": "/static/quiz/uploads/krosh.png",
+      "choices": ["Крош", "Ёжик", "Пин", "Бараш"],
+      "correct": 0
+    },
+    {
+      "term": "/static/quiz/uploads/ezhik.png",
+      "choices": ["Ёжик", "Бараш", "Крош", "Пин"],
+      "correct": 0
+    },
+    {
+      "term": "/static/quiz/uploads/barash.png",
+      "choices": ["Бараш", "Копатыч", "Совунья", "Лосяш"],
+      "correct": 0
+    },
+    {
+      "term": "/static/quiz/uploads/dom_krosha.png",
+      "choices": ["Дом Кроша", "Дом Бараша", "Дом Лосяша", "Дом Пина"],
+      "correct": 0
+    },
+    {
+      "term": "/static/quiz/uploads/dom_kopatych.png",
+      "choices": ["Дом Копатыча", "Дом Карыча", "Дом Нюши", "Дом Ёжика"],
+      "correct": 0
+    },
+    {
+      "term": "/static/quiz/uploads/losyash_lab.png",
+      "choices": ["Лаборатория Лосяша", "Кухня Копатыча", "Мастерская Пина", "Комната Нюши"],
+      "correct": 0
+    },
+
+    {
+      "term": "«Наука — это строго упорядоченный хаос!»",
+      "choices": [
+        "/static/quiz/uploads/losyash.png",
+        "/static/quiz/uploads/pin.png",
+        "/static/quiz/uploads/karich.png",
+        "/static/quiz/uploads/barash.png"
+      ],
+      "correct": 0
+    },
+    {
+      "term": "«Если что-то можно улучшить — значит, нужно улучшить!»",
+      "choices": [
+        "/static/quiz/uploads/pin.png",
+        "/static/quiz/uploads/krosh.png",
+        "/static/quiz/uploads/kopatych.png",
+        "/static/quiz/uploads/sovunya.png"
+      ],
+      "correct": 0
+    },
+    {
+      "term": "«Поэзия — это когда сердце говорит громче слов…»",
+      "choices": [
+        "/static/quiz/uploads/barash.png",
+        "/static/quiz/uploads/ezhik.png",
+        "/static/quiz/uploads/karich.png",
+        "/static/quiz/uploads/nyusha.png"
+      ],
+      "correct": 0
+    },
+    {
+      "term": "«Иногда лучше подумать дважды, прежде чем прыгать трижды!»",
+      "choices": [
+        "/static/quiz/uploads/ezhik.png",
+        "/static/quiz/uploads/krosh.png",
+        "/static/quiz/uploads/sovunya.png",
+        "/static/quiz/uploads/karich.png"
+      ],
+      "correct": 0
+    },
+    {
+      "term": "«Красота — это ответственность, а не просто бантик!»",
+      "choices": [
+        "/static/quiz/uploads/nyusha.png",
+        "/static/quiz/uploads/sovunya.png",
+        "/static/quiz/uploads/krosh.png",
+        "/static/quiz/uploads/barash.png"
+      ],
+      "correct": 0
+    },
+    {
+      "term": "«Хороший завтрак — половина хорошего дня!»",
+      "choices": [
+        "/static/quiz/uploads/kopatych.png",
+        "/static/quiz/uploads/pin.png",
+        "/static/quiz/uploads/losyash.png",
+        "/static/quiz/uploads/krosh.png"
+      ],
+      "correct": 0
+    },
+    {
+      "term": "«Главное — сохранять достоинство, даже если вокруг хаос.»",
+      "choices": [
+        "/static/quiz/uploads/karich.png",
+        "/static/quiz/uploads/sovunya.png",
+        "/static/quiz/uploads/losyash.png",
+        "/static/quiz/uploads/barash.png"
+      ],
+      "correct": 0
+    },
+    {
+      "term": "«Здоровый сон — лучший помощник в любом деле.»",
+      "choices": [
+        "/static/quiz/uploads/sovunya.png",
+        "/static/quiz/uploads/kopatych.png",
+        "/static/quiz/uploads/ezhik.png",
+        "/static/quiz/uploads/losyash.png"
+      ],
+      "correct": 0
+    },
+    {
+      "term": "«Если приключение зовёт — нужно бежать быстрее, чем оно!»",
+      "choices": [
+        "/static/quiz/uploads/krosh.png",
+        "/static/quiz/uploads/ezhik.png",
+        "/static/quiz/uploads/pin.png",
+        "/static/quiz/uploads/nyusha.png"
+      ],
+      "correct": 0
+    },
+    {
+      "term": "«Иногда молчание — лучший способ сказать самое важное.»",
+      "choices": [
+        "/static/quiz/uploads/ezhik.png",
+        "/static/quiz/uploads/barash.png",
+        "/static/quiz/uploads/karich.png",
+        "/static/quiz/uploads/sovunya.png"
+      ],
+      "correct": 0
+    }
+  ]
+}
